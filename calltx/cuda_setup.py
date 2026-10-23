@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import threading
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -26,6 +27,13 @@ MARKER = "ready.json"
 CHUNK = 1 << 20
 
 Progress = Callable[[float, str], None]
+_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(target: Path) -> threading.Lock:
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(str(Path(target).resolve()).lower(), threading.Lock())
 
 
 class CudaSetupError(Exception):
@@ -77,6 +85,13 @@ class CudaSetup:
         return out
 
     def run(self, progress: Progress) -> None:
+        with _lock_for(self.target):  # nunca dos descargas a la vez sobre la misma carpeta
+            if self.is_ready():
+                progress(1.0, "Componentes de GPU listos")
+                return
+            self._run_guarded(progress)
+
+    def _run_guarded(self, progress: Progress) -> None:
         try:
             self._run(progress)
         except CudaSetupError:
@@ -100,7 +115,8 @@ class CudaSetup:
             def on_bytes(done: int, _tot: int, base=base, size=size, msg=msg) -> None:
                 progress(min(1.0, (base + min(done, size or done)) / total) * 0.98, msg)
 
-            self._download(url, part, on_bytes)
+            if not (size and part.exists() and part.stat().st_size >= size):
+                self._download(url, part, on_bytes)
             self._extract(part, name)
             part.unlink(missing_ok=True)
             base += size

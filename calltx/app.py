@@ -44,6 +44,8 @@ class App:
         self._label: str | None = None
         self.busy = False  # True mientras se cierra una grabación (últimas frases)
         self.preparing: tuple[float, str] | None = None  # (progreso 0-1, texto) en el primer uso
+        self.progress: tuple[float, str] | None = None  # progreso visible (también recargas)
+        self.request_model_reload: Callable[[], None] | None = None  # reintento si no hay modelo
         # ajuste → función que lo aplica en vivo (la rellena main); puede lanzar con un mensaje
         self.appliers: dict[str, Callable[[object], None]] = {}
         self.save_settings: Callable[[], None] = lambda: None
@@ -62,8 +64,10 @@ class App:
             return "preparing"
         return "armed" if self.settings.auto_mode else "idle"
 
-    def set_preparing(self, value: tuple[float, str] | None) -> None:
-        self.preparing = value
+    def set_preparing(self, value: tuple[float, str] | None, blocking: bool = True) -> None:
+        """blocking=False: solo informa del progreso (ya hay un modelo con el que grabar)."""
+        self.preparing = value if blocking else None
+        self.progress = value
         self._changed()
 
     @property
@@ -113,9 +117,15 @@ class App:
 
     def _model_ready(self) -> bool:
         """No bloquea: mientras se prepara el modelo (descargas del primer uso) no se graba."""
-        if self.preparing is None and self._wait_ready(0):
+        prep = self.preparing  # copia: otro hilo puede cambiarlo
+        if prep is None and self._wait_ready(0):
             return True
-        pct = f" ({int(self.preparing[0] * 100)} %)" if self.preparing else ""
+        if prep is None and self.request_model_reload is not None:
+            # No hay modelo y no se está preparando (p. ej. falló la descarga sin conexión).
+            self._notify("Modelo no disponible", "Reintentando la descarga; podrás grabar en cuanto termine")
+            self.request_model_reload()
+            return False
+        pct = f" ({int(prep[0] * 100)} %)" if prep else ""
         self._notify("Aún preparando el modelo", f"Podrás grabar en cuanto termine{pct}")
         return False
 

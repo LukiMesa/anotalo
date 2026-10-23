@@ -1,29 +1,24 @@
-import pytest
-
-from calltx.ui.winchrome import EDGES, Chrome
+from calltx.ui.winchrome import Chrome
 
 
 class FakeWin32:
     def __init__(self):
-        self.rect = (100, 100, 1220, 820)
-        self.work = (0, 0, 1920, 1040)  # sin la barra de tareas
+        self.zoomed = False
         self.calls = []
 
-    def get_rect(self, hwnd):
-        return self.rect
+    def is_zoomed(self, hwnd):
+        return self.zoomed
 
-    def set_rect(self, hwnd, rect):
-        self.rect = rect
-        self.calls.append(("set_rect", rect))
+    def maximize(self, hwnd):
+        self.zoomed = True
+        self.calls.append("max")
 
-    def work_area(self, hwnd):
-        return self.work
-
-    def send_nc(self, hwnd, hit):
-        self.calls.append(("nc", hit))
+    def restore(self, hwnd):
+        self.zoomed = False
+        self.calls.append("restore")
 
     def minimize(self, hwnd):
-        self.calls.append(("min",))
+        self.calls.append("min")
 
 
 def make():
@@ -31,37 +26,36 @@ def make():
     return Chrome(lambda: 42, w), w
 
 
-def test_maximize_rect_uses_monitor_work_area():
+def test_toggle_uses_native_maximize_and_restore():
     c, w = make()
-    assert c.toggle_maximize() is True
-    assert w.rect == (0, 0, 1920, 1040)
+    assert c.toggle_maximize() is True and w.calls == ["max"]
+    assert c.toggle_maximize() is False and w.calls == ["max", "restore"]
 
 
-def test_toggle_restores_previous_rect():
+def test_maximized_reflects_window_state():
+    # p. ej. maximizada con doble clic o Win+↑: el estado se lee de Windows
     c, w = make()
-    c.toggle_maximize()
-    assert c.toggle_maximize() is False
-    assert w.rect == (100, 100, 1220, 820)
+    w.zoomed = True
+    assert c.maximized is True
+    assert c.toggle_maximize() is False and w.calls == ["restore"]
 
 
-def test_drag_and_resize_send_native_hits():
-    c, w = make()
-    c.start_drag()
-    c.start_resize("bottomright")
-    assert w.calls == [("nc", 2), ("nc", EDGES["bottomright"])]
+def test_minimize_and_hide():
+    hidden = []
+    w = FakeWin32()
+    c = Chrome(lambda: 42, w, hide=lambda: hidden.append(1))
+    c.minimize()
+    c.hide()
+    assert w.calls == ["min"] and hidden == [1]
 
 
-def test_resize_edge_validated():
-    c, _ = make()
-    with pytest.raises(ValueError):
-        c.start_resize("diagonal")
+def test_work_area_relative_to_monitor():
+    from calltx.ui.window import maximized_bounds
 
-
-def test_drag_from_maximized_restores_first():
-    c, w = make()
-    c.toggle_maximize()
-    c.start_drag()
-    assert c.maximized is False
+    # monitor secundario a la derecha, barra de tareas abajo de 48 px
+    assert maximized_bounds(screen=(2560, 0, 1920, 1080), work=(2560, 0, 1920, 1032)) == (0, 0, 1920, 1032)
+    # barra de tareas arriba en el principal
+    assert maximized_bounds(screen=(0, 0, 2560, 1440), work=(0, 48, 2560, 1392)) == (0, 48, 2560, 1392)
 
 
 def test_resize_bounds_edges_and_min_size():
@@ -70,15 +64,14 @@ def test_resize_bounds_edges_and_min_size():
     start = (100, 100, 1000, 700)
     assert resize_bounds("bottomright", start, 50, 30, 940, 600) == (100, 100, 1050, 730)
     assert resize_bounds("left", start, 40, 0, 940, 600) == (140, 100, 960, 700)
-    assert resize_bounds("left", start, 200, 0, 940, 600) == (160, 100, 940, 700)  # no baja del mínimo
+    assert resize_bounds("left", start, 200, 0, 940, 600) == (160, 100, 940, 700)
     assert resize_bounds("top", start, 0, -20, 940, 600) == (100, 80, 1000, 720)
 
 
-def test_adopt_native_maximize_then_restore():
-    c, w = make()
-    events = []
-    c._on_maximized = events.append
-    c.adopt_maximized((10, 20, 900, 700))
-    assert c.maximized is True and events == [True]
-    assert c.toggle_maximize() is False
-    assert w.rect == (10, 20, 900, 700)
+def test_main_window_exposes_hwnd_for_chrome():
+    # main.py conecta Chrome con MainWindow.get_hwnd: si falta, los botones de la barra no hacen nada
+    from calltx.ui.window import MainWindow
+
+    w = object.__new__(MainWindow)
+    w.hwnd = 1234
+    assert w.get_hwnd() == 1234

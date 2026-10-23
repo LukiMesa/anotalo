@@ -159,8 +159,9 @@ function renderState(st) {
   renderTimer();
   const labels = { idle: "Inactivo", armed: "Esperando llamada", recording: "Grabando", preparing: "Preparando…" };
   $("#state-dot").className = "dot " + S.state.state;
-  $("#state-text").textContent = S.state.state === "preparing" && S.state.progress != null
-    ? `Preparando… ${Math.round(S.state.progress * 100)} %` : (labels[S.state.state] || "");
+  const pct = S.state.progress != null ? ` · ${Math.round(S.state.progress * 100)} %` : "";
+  $("#state-text").textContent = S.state.state === "preparing"
+    ? `Preparando…${pct}` : (labels[S.state.state] || "") + (S.state.state !== "recording" ? pct : "");
   $("#state-keys").innerHTML = keysHtml(S.state.hotkey);
   if (S.state.device) $("#device").textContent = S.state.device;
   if (S.state.version) $("#version").textContent = "Versión " + S.state.version + (S.state.frozen ? "" : " · desarrollo");

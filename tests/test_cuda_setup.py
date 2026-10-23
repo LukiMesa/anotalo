@@ -86,3 +86,44 @@ def test_progress_monotonic_to_1(tmp_path):
     seen = []
     CudaSetup(tmp_path, net.fetch_json, net.download).run(lambda p, msg: seen.append(p))
     assert seen == sorted(seen) and seen[-1] == pytest.approx(1.0)
+
+
+def test_complete_part_is_not_downloaded_again(tmp_path):
+    # Se cerró la app justo tras descargar (antes de extraer): no pedir más bytes (HTTP 416).
+    net = FakeNet()
+    s = CudaSetup(tmp_path, net.fetch_json, net.download)
+    dl = tmp_path / "_dl"
+    dl.mkdir(parents=True)
+    for name, _ in WHEELS:
+        (dl / f"{name}.whl.part").write_bytes(net.wheels[name])
+
+    def no_download(url, dest, progress):
+        raise AssertionError("no debía descargar")
+
+    CudaSetup(tmp_path, net.fetch_json, no_download).run(lambda p, m: None)
+    assert s.is_ready()
+
+
+def test_runs_are_serialized(tmp_path):
+    import threading
+    import time
+
+    net = FakeNet()
+    active, overlaps = [0], []
+
+    def slow_download(url, dest, progress):
+        active[0] += 1
+        if active[0] > 1:
+            overlaps.append(url)
+        time.sleep(0.05)
+        net.download(url, dest, progress)
+        active[0] -= 1
+
+    ts = [threading.Thread(target=lambda: CudaSetup(tmp_path, net.fetch_json, slow_download).run(lambda p, m: None))
+          for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert overlaps == []
+    assert CudaSetup(tmp_path, None, None).is_ready()

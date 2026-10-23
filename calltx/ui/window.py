@@ -43,6 +43,13 @@ def enable_native_drag_regions() -> None:
 RESIZE_BORDER = 5
 
 
+def maximized_bounds(screen: tuple[int, int, int, int], work: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """Límites al maximizar (x, y, ancho, alto) relativos al monitor: su área de trabajo."""
+    sx, sy, _, _ = screen
+    wx, wy, ww, wh = work
+    return wx - sx, wy - sy, ww, wh
+
+
 def resize_bounds(edge: str, start: tuple[int, int, int, int], dx: int, dy: int,
                   min_w: int, min_h: int) -> tuple[int, int, int, int]:
     """Nuevo (x, y, ancho, alto) al arrastrar `edge` desde `start` un desplazamiento (dx, dy)."""
@@ -61,7 +68,7 @@ def resize_bounds(edge: str, start: tuple[int, int, int, int], dx: int, dy: int,
 
 
 def install_resize_border(form, border: int = RESIZE_BORDER, min_size: tuple[int, int] = (940, 600),
-                          on_native_maximize=lambda normal: None) -> None:
+                          on_state=lambda maximized: None) -> None:
     """Deja un borde fino alrededor de la página que maneja la propia ventana para
     redimensionarla (la página procesa el ratón en otro proceso, así que no puede)."""
     from System import Action
@@ -110,26 +117,29 @@ def install_resize_border(form, border: int = RESIZE_BORDER, min_size: tuple[int
         drag.clear()
         form.Capture = False
 
+    def update_max_bounds(*_):
+        scr = Screen.FromControl(form)
+        b, w = scr.Bounds, scr.WorkingArea
+        x, y, ww, hh = maximized_bounds((b.X, b.Y, b.Width, b.Height), (w.X, w.Y, w.Width, w.Height))
+        form.MaximizedBounds = Rectangle(x, y, ww, hh)
+
     def on_resize(sender, e):
-        # Sin marco, el maximizado nativo taparía la barra de tareas: se ajusta al área de trabajo.
-        if form.WindowState == FormWindowState.Maximized:
-            rb = form.RestoreBounds
-            normal = (rb.X, rb.Y, rb.X + rb.Width, rb.Y + rb.Height)
-            work = Screen.FromControl(form).WorkingArea
-            form.WindowState = FormWindowState.Normal
+        maximized = form.WindowState == FormWindowState.Maximized
+        form.Padding = Padding(0 if maximized else border)  # maximizada no se redimensiona
+        if state.get("max") != maximized:
+            state["max"] = maximized
+            on_state(maximized)
 
-            def apply():  # tras terminar el cambio de estado, si no Windows restaura encima
-                form.Bounds = work
-                on_native_maximize(normal)
-
-            form.BeginInvoke(Action(apply))
+    state: dict = {}
 
     def install():
         form.Padding = Padding(border)
+        update_max_bounds()
         form.MouseDown += on_down
         form.MouseMove += on_move
         form.MouseUp += on_up
         form.Resize += on_resize
+        form.LocationChanged += update_max_bounds
 
     form.Invoke(Action(install))
 
@@ -174,21 +184,10 @@ class MainWindow:
         if self.hwnd:
             apply_chrome(self.hwnd)
         try:
-            install_resize_border(self.window.native, on_native_maximize=self._native_maximized)
+            install_resize_border(self.window.native,
+                                  on_state=lambda m: self.push({"type": "window", "maximized": m}))
         except Exception:  # noqa: BLE001
             log.warning("No se pudo preparar el borde para redimensionar", exc_info=True)
-
-    def _native_maximized(self, normal) -> None:
-        if self.chrome is not None:
-            self.chrome.adopt_maximized(normal)
-        self.push({"type": "window", "maximized": True})
-
-    def on_maximized(self, maximized: bool) -> None:
-        """Maximizada no hay borde para redimensionar (como en Windows)."""
-        try:
-            set_border(self.window.native, 0 if maximized else RESIZE_BORDER)
-        except Exception:  # noqa: BLE001
-            log.debug("No se pudo ajustar el borde", exc_info=True)
 
     def get_hwnd(self) -> int | None:
         if not self.hwnd:

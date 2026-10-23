@@ -295,3 +295,21 @@ def test_state_preparing():
     assert h.app.state == "preparing" and states[-1] == "preparing"
     h.app.set_preparing(None)
     assert h.app.state == "armed"
+
+
+def test_non_blocking_progress_keeps_recording_available():
+    h = Harness()
+    h.app.set_preparing((0.3, "Descargando modelo"), blocking=False)
+    assert h.app.state == "armed"
+    h.app.toggle()
+    assert h.sessions and h.sessions[0].started
+
+
+def test_failed_model_retries_on_hotkey():
+    h = Harness()
+    retries = []
+    h.app._wait_ready = lambda timeout: False  # no hay modelo y no se está preparando
+    h.app.request_model_reload = lambda: retries.append(1)
+    h.app.toggle()
+    assert h.sessions == [] and retries == [1]
+    assert any("reintent" in (n[0] + n[1]).lower() for n in h.notes)

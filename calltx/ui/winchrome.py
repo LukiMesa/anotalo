@@ -55,6 +55,7 @@ _u.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, winty
 _u.SendMessageW.restype = ctypes.c_ssize_t
 _u.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 _u.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+_u.IsZoomed.argtypes = [wintypes.HWND]
 _u.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
 _u.FindWindowW.restype = wintypes.HWND
 _u.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
@@ -91,16 +92,29 @@ class Win32:
     def minimize(self, hwnd) -> None:
         _u.ShowWindow(hwnd, SW_MINIMIZE)
 
+    def maximize(self, hwnd) -> None:
+        _u.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
+
+    def restore(self, hwnd) -> None:
+        _u.ShowWindow(hwnd, 9)  # SW_RESTORE
+
+    def is_zoomed(self, hwnd) -> bool:
+        return bool(_u.IsZoomed(hwnd))
+
 
 class Chrome:
-    def __init__(self, get_hwnd: Callable[[], int | None], win32=None, hide: Callable[[], None] = lambda: None,
-                 on_maximized: Callable[[bool], None] = lambda m: None):
+    """Botones de la barra propia. Maximizar es el de Windows (los límites al área de trabajo
+    los pone la ventana), así encajar, doble clic, arrastrar para restaurar y Win+↓ son nativos."""
+
+    def __init__(self, get_hwnd: Callable[[], int | None], win32=None, hide: Callable[[], None] = lambda: None):
         self._hwnd = get_hwnd
-        self._on_maximized = on_maximized
         self._w = win32 or Win32()
         self._hide = hide
-        self._normal: Rect | None = None
-        self.maximized = False
+
+    @property
+    def maximized(self) -> bool:
+        h = self._hwnd()
+        return bool(h and self._w.is_zoomed(h))
 
     def minimize(self) -> None:
         if h := self._hwnd():
@@ -112,40 +126,12 @@ class Chrome:
     def toggle_maximize(self) -> bool:
         h = self._hwnd()
         if not h:
-            return self.maximized
-        if self.maximized:
-            if self._normal:
-                self._w.set_rect(h, self._normal)
-            self.maximized = False
-        else:
-            self._normal = self._w.get_rect(h)
-            self._w.set_rect(h, self._w.work_area(h))
-            self.maximized = True
-        self._on_maximized(self.maximized)
-        return self.maximized
-
-    def adopt_maximized(self, normal: Rect) -> None:
-        """Windows maximizó por su cuenta (doble clic, Win+↑): la ventana ya ocupa el área de
-        trabajo; se recuerda el tamaño normal para poder restaurar."""
-        self._normal = normal
-        self.maximized = True
-        self._on_maximized(True)
-
-    def start_drag(self) -> None:
-        h = self._hwnd()
-        if not h:
-            return
-        if self.maximized:
-            # como Windows: al arrastrar una ventana maximizada vuelve a su tamaño normal
-            self.toggle_maximize()
-        self._w.send_nc(h, HTCAPTION)
-
-    def start_resize(self, edge: str) -> None:
-        if edge not in EDGES:
-            raise ValueError(f"Borde no válido: {edge}")
-        h = self._hwnd()
-        if h and not self.maximized:
-            self._w.send_nc(h, EDGES[edge])
+            return False
+        if self._w.is_zoomed(h):
+            self._w.restore(h)
+            return False
+        self._w.maximize(h)
+        return True
 
 
 def find_window(title: str, pid: int) -> int | None:

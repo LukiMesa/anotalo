@@ -84,18 +84,19 @@ def _add_cuda_dll_dirs() -> None:
                 os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
 
 
-def _download_with_progress(model: str, on_progress) -> str:
-    """Descarga el modelo de Hugging Face informando del progreso (bytes de todos los archivos)."""
-    from faster_whisper.utils import _MODELS
-    from huggingface_hub import snapshot_download
+def make_progress_bar(on_progress, model: str):
+    """Clase tqdm que informa del progreso total (bytes de todos los archivos) sin escribir en
+    consola: el ejecutable no tiene (sys.stderr es None)."""
+    import io
+
     from tqdm.auto import tqdm
 
-    repo = _MODELS.get(model, model)
     bars: dict[int, tuple[float, float]] = {}
 
     class Bar(tqdm):
         def __init__(self, *a, **k):
             k["disable"] = False
+            k["file"] = io.StringIO()
             super().__init__(*a, **k)
 
         def update(self, n=1):
@@ -108,6 +109,16 @@ def _download_with_progress(model: str, on_progress) -> str:
                     on_progress(min(0.99, done / tot), f"Descargando modelo {model}")
             return r
 
+    return Bar
+
+
+def _download_with_progress(model: str, on_progress) -> str:
+    """Descarga el modelo de Hugging Face informando del progreso."""
+    from faster_whisper.utils import _MODELS
+    from huggingface_hub import snapshot_download
+
+    repo = _MODELS.get(model, model)
+    Bar = make_progress_bar(on_progress, model)
     allow = ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.*"]
     return snapshot_download(repo, allow_patterns=allow, tqdm_class=Bar)
 

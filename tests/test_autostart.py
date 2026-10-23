@@ -14,16 +14,6 @@ def test_autostart_enable_disable(tmp_path):
     assert not autostart.is_enabled(tmp_path)
 
 
-def test_ensure_autostart_only_first_run(tmp_path):
-    s = Settings()
-    target = Path(r"C:\Windows\System32\notepad.exe")
-    autostart.enable(target, "--minimized", tmp_path, startup_dir=tmp_path)
-    assert autostart.ensure_autostart(s, target, "--minimized", tmp_path, startup_dir=tmp_path, frozen=True) is True
-    autostart.disable(tmp_path)
-    assert autostart.ensure_autostart(s, target, "--minimized", tmp_path, startup_dir=tmp_path, frozen=True) is False
-    assert s.autostart is True  # ya configurado: no se vuelve a leer
-
-
 def test_dev_never_touches_shortcut(tmp_path):
     s = Settings()
     target = Path(r"C:\Windows\System32\notepad.exe")
@@ -48,3 +38,12 @@ def test_frozen_first_run_without_shortcut_sets_false(tmp_path):
 
 def test_target_for_current_run_dev_is_none():
     assert autostart.target_for_current_run(frozen=False) is None
+
+
+def test_frozen_syncs_with_shortcut_every_start(tmp_path):
+    target = Path(r"C:\Windows\System32\notepad.exe")
+    s = Settings(autostart=True, autostart_configured=True)
+    # el instalador (actualización) quitó el acceso directo: el ajuste lo refleja
+    assert autostart.ensure_autostart(s, target, "--minimized", tmp_path, startup_dir=tmp_path, frozen=True) is True
+    assert s.autostart is False
+    assert autostart.ensure_autostart(s, target, "--minimized", tmp_path, startup_dir=tmp_path, frozen=True) is False

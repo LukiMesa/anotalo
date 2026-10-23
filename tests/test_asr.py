@@ -140,3 +140,18 @@ def test_youtube_style_hallucinations_filtered():
               "Subtítulos por la comunidad de Amara.org", "¡Gracias por vernos!"]:
         assert is_hallucination(t, -0.3, 0.1), t
     assert not is_hallucination("Me suscribí al plan premium la semana pasada", -0.3, 0.1)
+
+
+def test_download_progress_bar_without_console(monkeypatch):
+    # El ejecutable no tiene consola: sys.stderr es None y la barra de progreso no debe fallar.
+    import sys
+
+    from calltx.asr import make_progress_bar
+
+    seen = []
+    monkeypatch.setattr(sys, "stderr", None)
+    Bar = make_progress_bar(lambda p, m: seen.append(p), "small")
+    b = Bar(total=1000, unit="B")
+    b.update(500)
+    b.close()
+    assert seen and 0.4 < seen[-1] < 0.6

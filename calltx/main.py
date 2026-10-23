@@ -178,13 +178,30 @@ def main() -> int:
     models = ModelHolder(lambda: Transcriber(settings, resolved=plan["resolved"]),
                          busy=lambda: holder_app["app"].state == "recording" or holder_app["app"].busy)
 
+    load_lock = threading.Lock()
+    last_pct = {"v": -1}
+
     def preparing(progress: float, text: str) -> None:
-        holder_app["app"].set_preparing((progress, text))
-        tray_tip(f"Preparando… {int(progress * 100)} %")
+        pct = int(progress * 100)
+        if pct == last_pct["v"]:
+            return  # una actualización por punto porcentual
+        last_pct["v"] = pct
+        # Solo bloquea la grabación si todavía no hay ningún modelo cargado (primer uso).
+        holder_app["app"].set_preparing((progress, text), blocking=models.current is None)
+        tray_tip(f"Preparando… {pct} %")
 
     def load_model():
+        if not load_lock.acquire(blocking=False):
+            return  # ya hay una carga en marcha; usará los ajustes actuales
+        try:
+            _load_model()
+        finally:
+            load_lock.release()
+
+    def _load_model():
         app_ = holder_app["app"]
-        app_.set_preparing((0.0, "Cargando modelo…"))
+        last_pct["v"] = -1
+        app_.set_preparing((0.0, "Cargando modelo…"), blocking=models.current is None)
         nvidia = has_nvidia_driver()
         cuda = CudaSetup(cuda_dir())
         # En desarrollo las DLL de CUDA vienen del entorno de pip.
@@ -246,6 +263,7 @@ def main() -> int:
     app = App(settings, detector_factory, session_factory, _notifier,
               wait_ready=lambda timeout: models.ready.wait(timeout), copy_text=copy_text)
     holder_app["app"] = app
+    app.request_model_reload = lambda: threading.Thread(target=load_model, name="model-retry", daemon=True).start()
     app.on_session_end.append(lambda *_: models.on_idle())
     app.save_settings = persist
 
@@ -258,8 +276,7 @@ def main() -> int:
         folder_dialog=lambda: holder["win"].folder_dialog(),
         device_info=device_info,
         hotkey_capture=lambda on: hotkey.pause() if on else hotkey.resume(),
-        chrome=Chrome(lambda: holder["win"].get_hwnd(), hide=lambda: holder["win"].hide(),
-                      on_maximized=lambda m: holder["win"].on_maximized(m)),
+        chrome=Chrome(lambda: holder["win"].get_hwnd(), hide=lambda: holder["win"].hide()),
     )
     win = MainWindow(api, start_hidden=start_hidden)
     holder["win"] = win
@@ -267,8 +284,8 @@ def main() -> int:
 
     def push_state(*_):
         win.push({"type": "state", "state": app.state, "hotkey": settings.hotkey, "device": device_info(),
-                  "progress": app.preparing[0] if app.preparing else None,
-                  "progress_text": app.preparing[1] if app.preparing else ""})
+                  "progress": app.progress[0] if app.progress else None,
+                  "progress_text": app.progress[1] if app.progress else ""})
 
     app.on_state_change.append(push_state)
 

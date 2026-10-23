@@ -23,7 +23,7 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-CloseApplications=yes
+CloseApplications=force
 RestartApplications=no
 
 [Languages]
@@ -44,6 +44,8 @@ Name: "{userstartup}\Transcriptor de llamadas"; Filename: "{app}\Transcriptor.ex
 
 [Run]
 Filename: "{app}\Transcriptor.exe"; Description: "Abrir Transcriptor"; Flags: nowait postinstall skipifsilent
+; Actualización silenciosa: volver a abrirla minimizada
+Filename: "{app}\Transcriptor.exe"; Parameters: "--minimized"; Flags: nowait; Check: WizardSilent
 
 [InstallDelete]
 ; Sin la casilla de inicio: quitar un acceso directo antiguo (p. ej. de la versión de desarrollo)
@@ -63,9 +65,24 @@ begin
   Result := Result and (v <> '') and (v <> '0.0.0.0');
 end;
 
+procedure CloseRunningApp();
+var code: Integer;
+begin
+  // La app solo se oculta al cerrar su ventana: se termina para poder reemplazar sus archivos.
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM Transcriptor.exe', '', SW_HIDE, ewWaitUntilTerminated, code);
+  Sleep(800);
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  CloseRunningApp();
+  Result := True;
+end;
+
 function InitializeSetup(): Boolean;
 var code: Integer;
 begin
+  CloseRunningApp();
   Result := True;
   if not WebView2Installed() then
   begin

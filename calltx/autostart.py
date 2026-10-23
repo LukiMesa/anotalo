@@ -52,14 +52,15 @@ def target_for_current_run(frozen: bool | None = None) -> tuple[Path, str, Path]
 
 def ensure_autostart(settings, target: Path, args: str, workdir: Path, startup_dir: Path | None = None,
                      frozen: bool | None = None) -> bool:
-    """Primera vez de la versión instalada: el ajuste refleja lo que eligió el instalador
-    (si creó o no el acceso directo). En desarrollo nunca se toca nada. True si cambió settings."""
+    """Versión instalada: el ajuste refleja siempre si existe el acceso directo (lo crea o quita el
+    instalador al instalar/actualizar, o el propio ajuste). En desarrollo nunca se toca nada.
+    Devuelve True si cambió settings."""
     from .paths import is_frozen
 
     if not (is_frozen() if frozen is None else frozen):
         return False
-    if settings.autostart_configured:
-        return False
-    settings.autostart = is_enabled(startup_dir)
+    enabled = is_enabled(startup_dir)
+    changed = settings.autostart != enabled or not settings.autostart_configured
+    settings.autostart = enabled
     settings.autostart_configured = True
-    return True
+    return changed
