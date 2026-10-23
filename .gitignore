@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+*.wav
+.pytest_cache/
+.superpowers/
+*.egg-info/
