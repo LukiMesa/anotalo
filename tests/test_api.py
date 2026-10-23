@@ -160,3 +160,32 @@ def test_hotkey_capture_hook(env):
 def test_log_js_never_raises(env):
     api, *_ = env
     assert api.log_js("TypeError: x is undefined") == {"ok": True}
+
+
+def test_hotkey_capture_auto_resumes(env):
+    import time
+
+    api, *_ = env
+    calls = []
+    api._hotkey_capture = calls.append
+    api._capture_timeout_s = 0.2
+    api.begin_hotkey_capture()
+    time.sleep(0.5)
+    assert calls == [True, False]
+    api.end_hotkey_capture()  # no duplica la reanudación
+    assert calls == [True, False]
+
+
+def test_purge_trash_removes_old(env):
+    import time
+
+    api, _, folder, *_ = env
+    tok = api.delete("2026-10-22_1120_Nota.md")["token"]
+    time.sleep(0.05)
+    assert api.purge_trash(0.01) == {"ok": True, "purged": 1}
+    assert api.undo(tok)["ok"] is False
+
+
+def test_undo_token_validated(env):
+    api, *_ = env
+    assert api.undo(r"1__..\..\x.md")["ok"] is False

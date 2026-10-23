@@ -42,6 +42,7 @@ class App:
         self.on_level: list[Callable[[float], None]] = []
         self.on_session_stopping: list[Callable[[str], None]] = []
         self._label: str | None = None
+        self.busy = False  # True mientras se cierra una grabación (últimas frases)
         # ajuste → función que lo aplica en vivo (la rellena main); puede lanzar con un mensaje
         self.appliers: dict[str, Callable[[object], None]] = {}
         self.save_settings: Callable[[], None] = lambda: None
@@ -160,6 +161,7 @@ class App:
     def _stop_session(self, user: bool) -> None:
         session, was_auto, label = self._session, self._session_auto, self._label
         self._session, self._session_auto, self._label = None, False, None
+        self.busy = True
         path, copied = None, False
         for cb in list(self.on_session_stopping):
             try:
@@ -176,6 +178,7 @@ class App:
         except Exception as e:  # noqa: BLE001
             log.exception("Error cerrando la grabación")
             self._notify("Error al guardar", str(e))
+        self.busy = False
         for cb in list(self.on_session_end):
             try:
                 cb(path, label or "", copied)
@@ -214,18 +217,19 @@ class App:
         """Aplica un ajuste en vivo. Devuelve un mensaje de error o None si fue bien."""
         if not hasattr(self.settings, key):
             return f"Ajuste desconocido: {key}"
-        if key in self.BLOCKED_WHILE_RECORDING and self._session is not None:
-            return "No se puede cambiar mientras se graba"
-        if key == "auto_mode":
-            self.set_auto(bool(value))
-        else:
-            hook = self.appliers.get(key)
-            if hook is not None:
-                try:
-                    hook(value)
-                except Exception as e:  # noqa: BLE001 - el mensaje va a la ventana
-                    return str(e) or "No se pudo aplicar el ajuste"
-            setattr(self.settings, key, value)
+        with self._lock:
+            if key in self.BLOCKED_WHILE_RECORDING and (self._session is not None or self.busy):
+                return "No se puede cambiar mientras se graba"
+            if key == "auto_mode":
+                self.set_auto(bool(value))
+            else:
+                hook = self.appliers.get(key)
+                if hook is not None:
+                    try:
+                        hook(value)
+                    except Exception as e:  # noqa: BLE001 - el mensaje va a la ventana
+                        return str(e) or "No se pudo aplicar el ajuste"
+                setattr(self.settings, key, value)
         try:
             self.save_settings()
         except Exception:  # noqa: BLE001

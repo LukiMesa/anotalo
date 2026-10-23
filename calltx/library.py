@@ -56,8 +56,11 @@ def parse_recording(path: Path) -> Recording:
     path = Path(path)
     m = _NAME.match(path.name)
     app = m.group(6) if m else ""
-    day = datetime(int(m[1]), int(m[2]), int(m[3])) if m else None
-    started = day.replace(hour=int(m[4]), minute=int(m[5])) if m else datetime.min
+    try:
+        day = datetime(int(m[1]), int(m[2]), int(m[3])) if m else None
+        started = day.replace(hour=int(m[4]), minute=int(m[5])) if m else datetime.min
+    except ValueError:  # fecha imposible en el nombre (p. ej. 30 de febrero)
+        day, started = None, datetime.min
     ended: datetime | None = None
     duration: int | None = None
     lines: list[Line] = []
@@ -70,6 +73,8 @@ def parse_recording(path: Path) -> Recording:
             app = t.group(1)
         elif f := _FIELD.match(raw):
             h, mi, s = int(f[2]), int(f[3]), int(f[4])
+            if f[1] in ("Inicio", "Fin") and day and not (h < 24 and mi < 60 and s < 60):
+                continue  # hora imposible: se ignora ese dato
             if f[1] == "Inicio" and day:
                 started = day.replace(hour=h, minute=mi, second=s)
             elif f[1] == "Fin" and day:
@@ -89,7 +94,13 @@ def list_recordings(folder: Path, kind: str = "all", query: str = "") -> list[Re
     folder = Path(folder)
     if not folder.is_dir():
         return []
-    recs = [parse_recording(p) for p in folder.glob("*.md") if p.is_file()]
+    recs = []
+    for p in folder.glob("*.md"):
+        try:
+            if p.is_file():
+                recs.append(parse_recording(p))
+        except Exception:  # noqa: BLE001 - un archivo raro nunca vacía la lista
+            continue
     if kind in ("call", "note"):
         recs = [r for r in recs if r.kind == kind]
     q = _fold(query.strip())
@@ -126,8 +137,10 @@ class Trash:
         return token
 
     def undo(self, token: str) -> Path:
+        ts, sep, name = token.partition("__")
+        if not (ts.isdigit() and sep and name and Path(name).name == name and name.endswith(".md")):
+            raise ValueError("Token de papelera no válido")
         src = self.dir / token
-        name = token.split("__", 1)[1]
         dest = self.folder / name
         n = 2
         while dest.exists():

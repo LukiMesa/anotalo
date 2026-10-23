@@ -29,3 +29,14 @@ def test_transcribing_and_saved_render():
     for state in ("transcribing", "saved"):
         img = render_pill(state, [], 0)
         assert img.height < 40
+
+
+def test_win32_calls_declare_64bit_safe_types():
+    # Sin argtypes/restype, ctypes trunca los handles de 64 bits (fallo aleatorio al dibujar).
+    from calltx.ui import indicator as m
+
+    for fn in [m._user32.GetDC, m._user32.ReleaseDC, m._gdi32.CreateCompatibleDC, m._gdi32.CreateDIBSection,
+               m._gdi32.SelectObject, m._gdi32.DeleteObject, m._gdi32.DeleteDC, m._user32.UpdateLayeredWindow,
+               m._user32.ShowWindow, m._user32.SetWindowPos, m._user32.CreateWindowExW, m._user32.DestroyWindow,
+               m._user32.RegisterClassW, m._kernel32.GetModuleHandleW]:
+        assert fn.argtypes is not None, fn.__name__

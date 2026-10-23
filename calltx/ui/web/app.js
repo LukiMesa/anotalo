@@ -36,6 +36,7 @@ function toast(html, ms = 3500) {
 
 // --- navegación ---------------------------------------------------------
 function show(view) {
+  if (listening && view !== S.view) renderKeyfield(false);
   S.view = view;
   $$(".nav").forEach((b) => b.dataset.view === view ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
   $$(".view").forEach((v) => v.classList.toggle("on", v.id === "view-" + view));
@@ -115,7 +116,9 @@ async function remove(id) {
   if (!res.ok) { toast(esc(res.error)); return; }
   await loadList();
   const t = toast(`Grabación borrada <button id="undo">Deshacer</button>`, 5000);
-  $("#undo", t).onclick = async () => { await api().undo(res.token); t.classList.remove("on"); await loadList(); select(id); };
+  let undone = false;
+  $("#undo", t).onclick = async () => { undone = true; await api().undo(res.token); t.classList.remove("on"); await loadList(); select(id); };
+  setTimeout(() => { if (!undone) api().purge_trash(5); }, 5600);
 }
 
 // --- eventos desde Python ------------------------------------------------
@@ -221,6 +224,10 @@ document.addEventListener("keydown", async (e) => {
   else $("#hotkey-err").textContent = res.error;
   renderKeyfield(false);
 }, true);
+
+// Si la ventana pierde el foco o se oculta mientras se captura un atajo, se cancela.
+window.addEventListener("blur", () => { if (listening) renderKeyfield(false); });
+document.addEventListener("visibilitychange", () => { if (document.hidden && listening) renderKeyfield(false); });
 
 // --- arranque -----------------------------------------------------------
 window.addEventListener("pywebviewready", async () => {

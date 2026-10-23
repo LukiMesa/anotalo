@@ -147,3 +147,11 @@ def test_purge_old(folder):
 def test_papelera_not_listed(folder):
     Trash(folder).delete(folder / "2026-10-23_1120_Nota.md")
     assert "2026-10-23_1120_Nota.md" not in [r.id for r in list_recordings(folder)]
+
+
+def test_bad_values_never_empty_the_list(tmp_path):
+    (tmp_path / "2026-10-23_1300_Teams.md").write_text(CALL.replace("15:04:12", "25:00:00"), encoding="utf-8")
+    (tmp_path / "2026-02-30_1000_Meet.md").write_text(HALF, encoding="utf-8")
+    (tmp_path / "2026-10-23_1120_Nota.md").write_text(NOTE, encoding="utf-8")
+    ids = {r.id for r in list_recordings(tmp_path)}
+    assert ids == {"2026-10-23_1300_Teams.md", "2026-02-30_1000_Meet.md", "2026-10-23_1120_Nota.md"}

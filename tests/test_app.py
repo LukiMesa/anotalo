@@ -260,3 +260,13 @@ def test_after_apply_runs_with_new_value():
     h.app.after_apply["model"] = lambda v: seen.append(h.app.settings.model)
     assert h.app.apply_setting("model", "small") is None
     assert seen == ["small"]
+
+
+def test_setting_blocked_while_stopping():
+    h = Harness()
+    h.app.toggle()
+    seen = []
+    h.app.on_session_stopping.append(lambda label: seen.append(h.app.apply_setting("model", "small")))
+    h.app.toggle()
+    assert seen == ["No se puede cambiar mientras se graba"]
+    assert h.app.busy is False

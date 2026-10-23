@@ -151,6 +151,8 @@ _user32.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.L
                                     ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
                                     wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID]
 _user32.GetDC.restype = wintypes.HDC
+_user32.GetDC.argtypes = [wintypes.HWND]
+_gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
 _gdi32.CreateCompatibleDC.restype = wintypes.HDC
 _gdi32.CreateDIBSection.restype = wintypes.HBITMAP
 _gdi32.CreateDIBSection.argtypes = [wintypes.HDC, ctypes.c_void_p, wintypes.UINT, ctypes.POINTER(ctypes.c_void_p),
@@ -162,6 +164,14 @@ _gdi32.DeleteDC.argtypes = [wintypes.HDC]
 _user32.UpdateLayeredWindow.argtypes = [wintypes.HWND, wintypes.HDC, ctypes.POINTER(wintypes.POINT),
                                         ctypes.POINTER(wintypes.SIZE), wintypes.HDC, ctypes.POINTER(wintypes.POINT),
                                         wintypes.COLORREF, ctypes.POINTER(BLENDFUNCTION), wintypes.DWORD]
+_user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+_user32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASSW)]
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+_kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+_user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+_user32.DestroyWindow.argtypes = [wintypes.HWND]
+_user32.GetDpiForWindow.argtypes = [wintypes.HWND]
 _user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int,
                                  ctypes.c_int, wintypes.UINT]
 
@@ -209,7 +219,7 @@ class Indicator:
             _user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))  # per-monitor v2
         except Exception:  # noqa: BLE001
             pass
-        hinst = ctypes.windll.kernel32.GetModuleHandleW(None)
+        hinst = _kernel32.GetModuleHandleW(None)
         wc = WNDCLASSW()
         wc.lpfnWndProc = _wndproc
         wc.hInstance = hinst
@@ -268,8 +278,12 @@ class Indicator:
             # barras: suben rápido, bajan en ~120 ms
             target = list(self._levels)
             self._shown = [max(t, s - dt / 0.12) for t, s in zip(target, self._shown)]
-            img = render_pill(state, self._shown, now - started, self._scale, spin=now * 1.2)
-            self._blit(img, alpha)
+            try:
+                img = render_pill(state, self._shown, now - started, self._scale, spin=now * 1.2)
+                self._blit(img, alpha)
+            except Exception:  # noqa: BLE001 - un fotograma fallido no apaga el indicador
+                log.exception("Error dibujando el indicador")
+                continue
             if not visible:
                 _user32.ShowWindow(self._hwnd, SW_SHOWNOACTIVATE)
                 _user32.SetWindowPos(self._hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE)
@@ -290,6 +304,10 @@ class Indicator:
         bmi = BITMAPINFOHEADER(ctypes.sizeof(BITMAPINFOHEADER), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
         bits = ctypes.c_void_p()
         hbmp = _gdi32.CreateDIBSection(mem, ctypes.byref(bmi), 0, ctypes.byref(bits), None, 0)
+        if not hbmp or not bits.value:
+            _gdi32.DeleteDC(mem)
+            _user32.ReleaseDC(None, screen)
+            raise OSError("CreateDIBSection falló")
         ctypes.memmove(bits, data, len(data))
         old = _gdi32.SelectObject(mem, hbmp)
         blend = BLENDFUNCTION(0, 0, alpha, AC_SRC_ALPHA)
@@ -300,3 +318,36 @@ class Indicator:
         _gdi32.DeleteObject(hbmp)
         _gdi32.DeleteDC(mem)
         _user32.ReleaseDC(None, screen)
+
+
+def wire_indicator(app, settings, indicator) -> None:
+    """Conecta la app con el indicador. Al terminar una grabación la píldora siempre se cierra,
+    aunque se haya desactivado el indicador a mitad de grabación."""
+    state = {"shown": False}
+
+    def on_start(label):
+        if settings.show_indicator:
+            indicator.show_recording()
+            state["shown"] = True
+
+    def on_stopping(label):
+        if state["shown"] and settings.show_indicator:
+            indicator.show_transcribing()
+
+    def on_end(path, label, copied):
+        if state["shown"] and settings.show_indicator and path is not None:
+            indicator.show_done(copied)
+        else:
+            indicator.hide()
+        state["shown"] = False
+
+    def on_toggle(value):
+        if not value:
+            indicator.hide()
+            state["shown"] = False
+
+    app.on_session_start.append(on_start)
+    app.on_level.append(indicator.push_level)
+    app.on_session_stopping.append(on_stopping)
+    app.on_session_end.append(on_end)
+    app.after_apply["show_indicator"] = on_toggle

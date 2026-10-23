@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import threading
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
@@ -47,6 +48,10 @@ class Api:
         hotkey_capture: Callable[[bool], None] = lambda on: None,
     ):
         self._hotkey_capture = hotkey_capture
+        self._capture_timeout_s = 20.0
+        self._capture_timer: threading.Timer | None = None
+        self._capturing = False
+        self._capture_lock = threading.Lock()
         self._app = app
         self._copy = clipboard_set
         self._save_dialog = save_dialog
@@ -159,7 +164,7 @@ class Api:
         try:
             Trash(self._folder()).undo(token)
             return {"ok": True}
-        except (OSError, IndexError) as e:
+        except (OSError, ValueError) as e:
             return _err(f"No se pudo deshacer: {e}")
 
     def open_folder(self) -> dict:
@@ -197,19 +202,40 @@ class Api:
         return self.set_setting("hotkey", spec)
 
     def begin_hotkey_capture(self) -> dict:
-        """Mientras la ventana escucha un atajo nuevo, el global se suelta para poder pulsarlo."""
-        try:
-            self._hotkey_capture(True)
-        except Exception:  # noqa: BLE001
-            log.exception("No se pudo pausar el atajo")
+        """Mientras la ventana escucha un atajo nuevo, el global se suelta para poder pulsarlo.
+        Por seguridad se reanuda solo tras unos segundos aunque la ventana no avise."""
+        with self._capture_lock:
+            if not self._capturing:
+                try:
+                    self._hotkey_capture(True)
+                except Exception:  # noqa: BLE001
+                    log.exception("No se pudo pausar el atajo")
+                self._capturing = True
+            if self._capture_timer:
+                self._capture_timer.cancel()
+            self._capture_timer = threading.Timer(self._capture_timeout_s, self.end_hotkey_capture)
+            self._capture_timer.daemon = True
+            self._capture_timer.start()
         return {"ok": True}
 
     def end_hotkey_capture(self) -> dict:
-        try:
-            self._hotkey_capture(False)
-        except Exception:  # noqa: BLE001
-            log.exception("No se pudo reanudar el atajo")
+        with self._capture_lock:
+            if self._capture_timer:
+                self._capture_timer.cancel()
+                self._capture_timer = None
+            if self._capturing:
+                self._capturing = False
+                try:
+                    self._hotkey_capture(False)
+                except Exception:  # noqa: BLE001
+                    log.exception("No se pudo reanudar el atajo")
         return {"ok": True}
+
+    def purge_trash(self, older_than_s: float = 5.0) -> dict:
+        try:
+            return {"ok": True, "purged": Trash(self._folder()).purge(older_than_s)}
+        except OSError as e:
+            return _err(str(e))
 
     def log_js(self, message: str) -> dict:
         log.warning("Ventana: %s", str(message)[:2000])

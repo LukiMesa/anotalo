@@ -108,7 +108,7 @@ def main() -> int:
     from .library import Trash
     from .session import CallSession
     from .ui.api import Api
-    from .ui.indicator import Indicator
+    from .ui.indicator import Indicator, wire_indicator
     from .ui.tray import Tray
     from .ui.window import MainWindow
 
@@ -124,51 +124,47 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         log.exception("No se pudo configurar el arranque con Windows")
     try:
-        Trash(Path(settings.output_dir)).purge()
+        Trash(Path(settings.output_dir)).purge(older_than_s=5)
     except OSError:
         log.exception("No se pudo vaciar la papelera")
 
-    # --- modelo (se puede recargar desde Ajustes) ----------------------------
-    asr = {"t": Transcriber(settings), "gpu": ""}
-    ready = threading.Event()
+    # --- modelo (se puede recargar desde Ajustes; ver calltx/models.py) -----
+    from .models import ModelHolder
+
+    gpu = {"name": ""}
+    holder_app: dict = {}
+    models = ModelHolder(lambda: Transcriber(settings),
+                         busy=lambda: holder_app["app"].state == "recording" or holder_app["app"].busy)
 
     def load_model():
-        ready.clear()
-        new = Transcriber(settings)
         log.info("Cargando modelo %s en %s…", settings.model, settings.device)
-        try:
-            new.start()
-        except Exception:  # noqa: BLE001
-            log.exception("No se pudo cargar ningún modelo de transcripción")
+        if models.reload_sync():
+            t = models.current
+            log.info("Modelo listo (%s%s)", t.device, ", modo de respaldo" if t.fallback_used else "")
+        else:
             _notifier("Error", "No se pudo cargar el modelo de transcripción. Revisa app.log")
-            return
-        old, asr["t"] = asr["t"], new
-        if old is not new:
-            old.stop()
-        log.info("Modelo listo (%s%s)", new.device, ", modo de respaldo" if new.fallback_used else "")
-        ready.set()
         push_state()
 
     def device_info() -> str:
-        t = asr["t"]
-        if not ready.is_set():
+        t = models.current
+        if t is None:
             return "Cargando modelo…"
         if t.device == "cuda":
-            return f"GPU · {asr['gpu'] or 'NVIDIA'} · {settings.model}"
+            return f"GPU · {gpu['name'] or 'NVIDIA'} · {settings.model}"
         return f"CPU (modo de respaldo) · {'small' if t.fallback_used else settings.model}"
 
     def session_factory(label: str, exe: str | None, on_line, on_level=None):
         mic = MicSource(settings.mic_device)
         if exe is None:
             log.info("Nota rápida: solo micrófono")
-            return CallSession(settings, asr["t"], label, mic, None, on_line=on_line, on_level=on_level)
+            return CallSession(settings, models.current, label, mic, None, on_line=on_line, on_level=on_level)
 
         def make_others():
             return open_call_audio(find_root_pid(exe))
 
         others = make_others()
         log.info("Sesión %s: audio de la llamada desde %s", label, others.name)
-        return CallSession(settings, asr["t"], label, mic, others,
+        return CallSession(settings, models.current, label, mic, others,
                            on_line=on_line, others_factory=make_others, on_level=on_level)
 
     def detector_factory(on_start, on_stop):
@@ -178,7 +174,9 @@ def main() -> int:
         )
 
     app = App(settings, detector_factory, session_factory, _notifier,
-              wait_ready=lambda timeout: ready.wait(timeout), copy_text=copy_text)
+              wait_ready=lambda timeout: models.ready.wait(timeout), copy_text=copy_text)
+    holder_app["app"] = app
+    app.on_session_end.append(lambda *_: models.on_idle())
     app.save_settings = persist
 
     # --- ventana -------------------------------------------------------------
@@ -212,16 +210,8 @@ def main() -> int:
 
     # --- indicador -----------------------------------------------------------
     indicator = Indicator()
-    app.on_session_start.append(lambda label: settings.show_indicator and indicator.show_recording())
-    app.on_level.append(indicator.push_level)
-    app.on_session_stopping.append(lambda label: settings.show_indicator and indicator.show_transcribing())
-
-    def on_end(path, label, copied):
-        if settings.show_indicator:
-            indicator.show_done(copied)
-        win.push({"type": "recordings", "select": path.name if path else None})
-
-    app.on_session_end.append(on_end)
+    wire_indicator(app, settings, indicator)
+    app.on_session_end.append(lambda path, label, copied: win.push({"type": "recordings", "select": path.name if path else None}))
 
     # --- ajustes que se aplican en vivo ---------------------------------------
     hotkey = GlobalHotkey(settings.hotkey, lambda: threading.Thread(target=app.toggle, daemon=True).start())
@@ -263,14 +253,14 @@ def main() -> int:
         hotkey.stop()
         indicator.close()
         tray.stop()
-        asr["t"].stop()
+        models.stop()
         win.destroy()
 
     tray = Tray(app, win.show, lambda: os.startfile(settings.output_dir), quit_all)
     _wait_show_requests(win.show)
 
     def bootstrap():
-        asr["gpu"] = _gpu_name()
+        gpu["name"] = _gpu_name()
         threading.Thread(target=load_model, name="model-load", daemon=True).start()
         hotkey.start()
         if not hotkey.registered.is_set():
