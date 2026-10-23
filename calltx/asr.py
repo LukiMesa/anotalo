@@ -65,6 +65,14 @@ def _add_cuda_dll_dirs() -> None:
     """Permite usar las DLL de CUDA instaladas como wheels de pip (sin CUDA del sistema)."""
     if sys.platform != "win32":
         return
+    from .paths import cuda_dir
+
+    # Versión instalada: DLL descargadas la primera vez en %LOCALAPPDATA%\Transcriptor\cuda
+    root = cuda_dir()
+    if root.is_dir():
+        for d in [p for p in root.iterdir() if p.is_dir() and not p.name.startswith("_")]:
+            os.add_dll_directory(str(d))
+            os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
     for base in map(Path, sys.path):
         nv = base / "nvidia"
         if not nv.is_dir():
@@ -90,26 +98,35 @@ def _default_factory(model: str, device: str, compute_type: str) -> Any:
 
 
 class Transcriber:
-    def __init__(self, settings: Settings, model_factory: Callable[..., Any] | None = None):
+    def __init__(self, settings: Settings, model_factory: Callable[..., Any] | None = None, resolved=None):
+        from .device import has_nvidia_driver, resolve
+
         self._s = settings
+        # Desarrollo: las DLL de CUDA vienen del entorno de pip, así que cuentan como listas.
+        self.resolved = resolved or resolve(settings, has_nvidia_driver(), cuda_ready=True)
         self._factory = model_factory or _default_factory
         self._q: queue.Queue[tuple[Segment, ResultCb] | None] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._model: Any = None
-        self.device = settings.device
+        self.device = self.resolved.device
+        self.model_name = self.resolved.model
         self.fallback_used = False
 
     def start(self) -> None:
         try:
-            self._model = self._factory(
-                model=self._s.model, device=self._s.device, compute_type=self._s.compute_type
-            )
+            r = self.resolved
+            self._model = self._factory(model=r.model, device=r.device, compute_type=r.compute_type)
             self.warmup()
         except Exception as e:  # noqa: BLE001 - cualquier fallo de CUDA → CPU
-            log.warning("No se pudo usar %s (%s); paso a CPU con 'small'", self._s.device, e)
+            if self.resolved.device == "cpu":
+                raise
+            from .device import cpu_fallback
+
+            fb = cpu_fallback(self._s)
+            log.warning("No se pudo usar la GPU (%s); paso al procesador con '%s'", e, fb.model)
             self.fallback_used = True
-            self.device = "cpu"
-            self._model = self._factory(model="small", device="cpu", compute_type="int8")
+            self.device, self.model_name = "cpu", fb.model
+            self._model = self._factory(model=fb.model, device="cpu", compute_type=fb.compute_type)
             self.warmup()
         self._thread = threading.Thread(target=self._run, name="asr", daemon=True)
         self._thread.start()

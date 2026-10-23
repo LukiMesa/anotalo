@@ -17,8 +17,9 @@ from .config import default_config_path, load_settings, save_settings
 log = logging.getLogger("calltx")
 
 ROOT = Path(__file__).resolve().parents[1]
-MUTEX = "CallTranscriberMutex"
-SHOW_EVENT = "CallTranscriberShow"
+from .paths import instance_names
+
+MUTEX, SHOW_EVENT = instance_names()
 
 
 def _setup_logging(base: Path) -> None:
@@ -137,7 +138,7 @@ def main() -> int:
                          busy=lambda: holder_app["app"].state == "recording" or holder_app["app"].busy)
 
     def load_model():
-        log.info("Cargando modelo %s en %s…", settings.model, settings.device)
+        log.info("Cargando modelo (ajuste %s / %s)…", settings.model, settings.device)
         if models.reload_sync():
             t = models.current
             log.info("Modelo listo (%s%s)", t.device, ", modo de respaldo" if t.fallback_used else "")
@@ -150,8 +151,8 @@ def main() -> int:
         if t is None:
             return "Cargando modelo…"
         if t.device == "cuda":
-            return f"GPU · {gpu['name'] or 'NVIDIA'} · {settings.model}"
-        return f"CPU (modo de respaldo) · {'small' if t.fallback_used else settings.model}"
+            return f"GPU · {gpu['name'] or 'NVIDIA'} · {t.model_name}"
+        return f"Procesador{' (respaldo)' if t.fallback_used else ''} · {t.model_name}"
 
     def session_factory(label: str, exe: str | None, on_line, on_level=None):
         mic = MicSource(settings.mic_device)

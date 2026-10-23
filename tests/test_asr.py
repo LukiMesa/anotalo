@@ -77,7 +77,9 @@ def test_fallback_on_cuda_error():
             raise RuntimeError("CUDA failed")
         return FakeModel()
 
-    t = Transcriber(Settings(), model_factory=factory)
+    from calltx.device import Resolved
+
+    t = Transcriber(Settings(), model_factory=factory, resolved=Resolved("cuda", "float16", "large-v3-turbo", False))
     t.start()
     assert t.fallback_used is True
     assert t.device == "cpu"
