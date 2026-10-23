@@ -1,20 +1,24 @@
-"""Punto de entrada: monta modelo, detector, icono, atajo y ventana."""
+"""Punto de entrada: modelo, detector, bandeja, atajo, indicador y ventana principal."""
 
 from __future__ import annotations
 
 import ctypes
 import logging
 import os
+import subprocess
 import sys
 import threading
-import tkinter as tk
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from .app import App
+from .app import NOTE_LABEL, App
 from .config import default_config_path, load_settings, save_settings
 
 log = logging.getLogger("calltx")
+
+ROOT = Path(__file__).resolve().parents[1]
+MUTEX = "CallTranscriberMutex"
+SHOW_EVENT = "CallTranscriberShow"
 
 
 def _setup_logging(base: Path) -> None:
@@ -30,8 +34,30 @@ def _setup_logging(base: Path) -> None:
 
 def _single_instance() -> bool:
     k32 = ctypes.windll.kernel32
-    k32.CreateMutexW(None, False, "CallTranscriberMutex")
+    k32.CreateMutexW(None, False, MUTEX)
     return k32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
+
+
+def _signal_first_instance() -> None:
+    k32 = ctypes.windll.kernel32
+    h = k32.CreateEventW(None, False, False, SHOW_EVENT)
+    if h:
+        k32.SetEvent(h)
+        k32.CloseHandle(h)
+
+
+def _wait_show_requests(callback) -> None:
+    k32 = ctypes.windll.kernel32
+    k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    k32.CreateEventW.restype = ctypes.c_void_p
+    h = k32.CreateEventW(None, False, False, SHOW_EVENT)
+
+    def loop():
+        while True:
+            if k32.WaitForSingleObject(h, 0xFFFFFFFF) == 0:
+                callback()
+
+    threading.Thread(target=loop, name="show-requests", daemon=True).start()
 
 
 def _notifier(title: str, msg: str, path: Path | None = None) -> None:
@@ -49,102 +75,211 @@ def _notifier(title: str, msg: str, path: Path | None = None) -> None:
     threading.Thread(target=send, daemon=True).start()
 
 
+def _gpu_name() -> str:
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5, creationflags=0x08000000,
+        )
+        return out.stdout.strip().splitlines()[0] if out.returncode == 0 and out.stdout.strip() else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def main() -> int:
     if not _single_instance():
+        _signal_first_instance()
         return 0
+    start_hidden = "--minimized" in sys.argv
     cfg_path = default_config_path()
     _setup_logging(cfg_path.parent)
     settings = load_settings(cfg_path)
-    if not cfg_path.exists():
-        save_settings(settings, cfg_path)
+    save_settings(settings, cfg_path)
     Path(settings.output_dir).mkdir(parents=True, exist_ok=True)
 
-    from .asr import Transcriber
-    from .audio.sources import DefaultLoopbackSource, MicSource, find_root_pid, open_call_audio
-    from .detector import CallDetector, _is_firefox, _is_teams, mic_in_use
-    from .session import CallSession
-    from .ui.live_window import LiveWindow
-    from .ui.tray import Tray
+    import webview
 
-    transcriber = Transcriber(settings)
+    from . import autostart
+    from .asr import Transcriber
+    from .audio.sources import MicSource, find_root_pid, open_call_audio
+    from .clipboard import set_text as copy_text
+    from .detector import CallApp, CallDetector
+    from .hotkey import GlobalHotkey, HotkeyError, validate_hotkey
+    from .library import Trash
+    from .session import CallSession
+    from .ui.api import Api
+    from .ui.indicator import Indicator
+    from .ui.tray import Tray
+    from .ui.window import MainWindow
+
+    def persist() -> None:
+        save_settings(settings, cfg_path)
+
+    # Arranque con Windows (primera vez con esta versión) y limpieza de la papelera.
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    autostart_args = f'"{ROOT / "run.pyw"}" --minimized'
+    try:
+        if autostart.ensure_autostart(settings, pythonw, autostart_args, ROOT):
+            persist()
+    except Exception:  # noqa: BLE001
+        log.exception("No se pudo configurar el arranque con Windows")
+    try:
+        Trash(Path(settings.output_dir)).purge()
+    except OSError:
+        log.exception("No se pudo vaciar la papelera")
+
+    # --- modelo (se puede recargar desde Ajustes) ----------------------------
+    asr = {"t": Transcriber(settings), "gpu": ""}
     ready = threading.Event()
 
     def load_model():
+        ready.clear()
+        new = Transcriber(settings)
         log.info("Cargando modelo %s en %s…", settings.model, settings.device)
         try:
-            transcriber.start()
+            new.start()
         except Exception:  # noqa: BLE001
             log.exception("No se pudo cargar ningún modelo de transcripción")
             _notifier("Error", "No se pudo cargar el modelo de transcripción. Revisa app.log")
             return
-        log.info("Modelo listo (%s%s)", transcriber.device, ", modo de respaldo" if transcriber.fallback_used else "")
+        old, asr["t"] = asr["t"], new
+        if old is not new:
+            old.stop()
+        log.info("Modelo listo (%s%s)", new.device, ", modo de respaldo" if new.fallback_used else "")
         ready.set()
+        push_state()
 
-    threading.Thread(target=load_model, name="model-load", daemon=True).start()
-
-    def manual_target() -> str | None:
-        keys = mic_in_use()
-        if any(_is_teams(k) for k in keys):
-            return "ms-teams.exe"
-        if any(_is_firefox(k) for k in keys):
-            return "firefox.exe"
-        return None
+    def device_info() -> str:
+        t = asr["t"]
+        if not ready.is_set():
+            return "Cargando modelo…"
+        if t.device == "cuda":
+            return f"GPU · {asr['gpu'] or 'NVIDIA'} · {settings.model}"
+        return f"CPU (modo de respaldo) · {'small' if t.fallback_used else settings.model}"
 
     def session_factory(label: str, exe: str | None, on_line, on_level=None):
         mic = MicSource(settings.mic_device)
         if exe is None:
-            # Nota rápida: solo el micrófono.
             log.info("Nota rápida: solo micrófono")
-            return CallSession(settings, transcriber, label, mic, None, on_line=on_line, on_level=on_level)
+            return CallSession(settings, asr["t"], label, mic, None, on_line=on_line, on_level=on_level)
 
         def make_others():
             return open_call_audio(find_root_pid(exe))
 
         others = make_others()
         log.info("Sesión %s: audio de la llamada desde %s", label, others.name)
-        return CallSession(
-            settings, transcriber, label, mic, others,
-            on_line=on_line, others_factory=make_others, on_level=on_level,
+        return CallSession(settings, asr["t"], label, mic, others,
+                           on_line=on_line, others_factory=make_others, on_level=on_level)
+
+    def detector_factory(on_start, on_stop):
+        return CallDetector(
+            on_start, on_stop,
+            enabled=lambda a: settings.detect_teams if a is CallApp.TEAMS else settings.detect_meet,
         )
 
-    from .clipboard import set_text as copy_text
+    app = App(settings, detector_factory, session_factory, _notifier,
+              wait_ready=lambda timeout: ready.wait(timeout), copy_text=copy_text)
+    app.save_settings = persist
 
-    app = App(
-        settings, lambda on_start, on_stop: CallDetector(on_start, on_stop), session_factory, _notifier,
-        wait_ready=lambda timeout: ready.wait(timeout), copy_text=copy_text,
+    # --- ventana -------------------------------------------------------------
+    holder: dict = {}
+    api = Api(
+        app,
+        clipboard_set=copy_text,
+        save_dialog=lambda name: holder["win"].save_dialog(name),
+        folder_dialog=lambda: holder["win"].folder_dialog(),
+        device_info=device_info,
+        hotkey_capture=lambda on: hotkey.pause() if on else hotkey.resume(),
+    )
+    win = MainWindow(api, start_hidden=start_hidden)
+    holder["win"] = win
+
+    def push_state(*_):
+        win.push({"type": "state", "state": app.state, "hotkey": settings.hotkey, "device": device_info()})
+
+    app.on_state_change.append(push_state)
+
+    def on_line(speaker, ts, _start, text):
+        s = app.session
+        if s is not None and s.path is not None:
+            win.push({"type": "line", "id": s.path.name, "ts": ts, "speaker": speaker,
+                      "me": speaker == settings.label_me, "text": text})
+
+    app.on_line.append(on_line)
+    app.on_session_start.append(
+        lambda label: win.push({"type": "recordings", "select": app.session.path.name if app.session and app.session.path else None})
     )
 
-    root = tk.Tk()
-    live = LiveWindow(root, settings.label_me, lambda: app.session.text() if app.session else "")
-    app.on_line.append(lambda speaker, ts, _start, text: live.append(speaker, ts, text))
-    app.on_session_start.append(lambda label: live.clear(f"Grabando — {label}"))
-    app.on_state_change.append(
-        lambda st: live.set_status({"idle": "Inactivo", "armed": "Esperando llamada…", "recording": "Grabando"}[st])
-        if st != "recording" else None
-    )
+    # --- indicador -----------------------------------------------------------
+    indicator = Indicator()
+    app.on_session_start.append(lambda label: settings.show_indicator and indicator.show_recording())
+    app.on_level.append(indicator.push_level)
+    app.on_session_stopping.append(lambda label: settings.show_indicator and indicator.show_transcribing())
 
-    def quit_all():
-        def do():
-            app.quit()
-            save_settings(settings, cfg_path)
-            tray.stop()
-            transcriber.stop()
-            root.after(0, root.destroy)
+    def on_end(path, label, copied):
+        if settings.show_indicator:
+            indicator.show_done(copied)
+        win.push({"type": "recordings", "select": path.name if path else None})
 
-        threading.Thread(target=do, daemon=True).start()
+    app.on_session_end.append(on_end)
 
-    tray = Tray(app, live.show, lambda: os.startfile(settings.output_dir), quit_all)
-
-    from .hotkey import GlobalHotkey
-
+    # --- ajustes que se aplican en vivo ---------------------------------------
     hotkey = GlobalHotkey(settings.hotkey, lambda: threading.Thread(target=app.toggle, daemon=True).start())
-    hotkey.start()
 
-    app.start()
-    tray.run_detached()
-    log.info("Transcriptor iniciado (atajo %s, modo automático %s)", settings.hotkey, settings.auto_mode)
-    try:
-        root.mainloop()
-    finally:
+    def apply_hotkey(spec):
+        validate_hotkey(spec)
+        try:
+            hotkey.rebind(spec)
+        except HotkeyError as e:
+            raise ValueError(str(e)) from None
+
+    def apply_autostart(on):
+        if on:
+            autostart.enable(pythonw, autostart_args, ROOT)
+        else:
+            autostart.disable()
+
+    def apply_model(_value):
+        threading.Thread(target=load_model, name="model-reload", daemon=True).start()
+
+    def apply_output_dir(value):
+        Path(value).mkdir(parents=True, exist_ok=True)
+
+    app.appliers.update({
+        "hotkey": apply_hotkey,
+        "autostart": apply_autostart,
+        "output_dir": apply_output_dir,
+    })
+    app.after_apply.update({
+        "model": apply_model,
+        "language": apply_model,
+        "output_dir": lambda _v: win.push({"type": "recordings"}),
+    })
+
+    # --- bandeja y salida ----------------------------------------------------
+    def quit_all():
+        app.quit()
+        persist()
         hotkey.stop()
+        indicator.close()
+        tray.stop()
+        asr["t"].stop()
+        win.destroy()
+
+    tray = Tray(app, win.show, lambda: os.startfile(settings.output_dir), quit_all)
+    _wait_show_requests(win.show)
+
+    def bootstrap():
+        asr["gpu"] = _gpu_name()
+        threading.Thread(target=load_model, name="model-load", daemon=True).start()
+        hotkey.start()
+        if not hotkey.registered.is_set():
+            _notifier("Atajo no disponible", f"{settings.hotkey} lo usa otra app. Cámbialo en Ajustes.")
+        app.start()
+        tray.run_detached()
+        push_state()
+        log.info("Transcriptor iniciado (atajo %s, modo automático %s)", settings.hotkey, settings.auto_mode)
+
+    storage = cfg_path.parent / "webview"
+    webview.start(bootstrap, gui="edgechromium", private_mode=False, storage_path=str(storage))
     return 0

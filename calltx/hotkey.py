@@ -51,6 +51,8 @@ def validate_hotkey(spec: str) -> tuple[int, int]:
 
 
 WM_APP_REBIND = 0x8000 + 1
+WM_APP_PAUSE = 0x8000 + 2
+WM_APP_RESUME = 0x8000 + 3
 
 
 class GlobalHotkey:
@@ -84,6 +86,20 @@ class GlobalHotkey:
         if not self._rebind_ok:
             raise HotkeyError("Esa combinación ya la usa otra aplicación")
 
+    def pause(self) -> None:
+        """Suelta el atajo (p. ej. mientras la ventana captura uno nuevo)."""
+        self._call(WM_APP_PAUSE)
+
+    def resume(self) -> None:
+        self._call(WM_APP_RESUME)
+
+    def _call(self, msg_id: int) -> None:
+        if self._tid is None:
+            return
+        self._rebind_done.clear()
+        ctypes.windll.user32.PostThreadMessageW(self._tid, msg_id, 0, 0)
+        self._rebind_done.wait(2)
+
     def _run(self) -> None:
         user32 = ctypes.windll.user32
         msg = wintypes.MSG()
@@ -114,6 +130,14 @@ class GlobalHotkey:
                         if was:
                             user32.RegisterHotKey(None, 1, self._mods, self._vk)
                         self._rebind_ok = False
+                    self._rebind_done.set()
+                elif msg.message == WM_APP_PAUSE:
+                    user32.UnregisterHotKey(None, 1)
+                    self.registered.clear()
+                    self._rebind_done.set()
+                elif msg.message == WM_APP_RESUME:
+                    if not self.registered.is_set() and user32.RegisterHotKey(None, 1, self._mods, self._vk):
+                        self.registered.set()
                     self._rebind_done.set()
         finally:
             user32.UnregisterHotKey(None, 1)

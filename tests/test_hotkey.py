@@ -73,3 +73,34 @@ def test_rebind_success():
         assert hk.spec == "<ctrl>+<alt>+<f9>"
     finally:
         hk.stop()
+
+
+def test_pause_releases_and_resume_restores():
+    import ctypes
+    import threading
+
+    from calltx.hotkey import GlobalHotkey, parse_hotkey
+
+    spec = "<ctrl>+<alt>+<f8>"
+    hk = GlobalHotkey(spec, lambda: None)
+    hk.start()
+    mods, vk = parse_hotkey(spec)
+
+    def try_register(out):
+        ok = ctypes.windll.user32.RegisterHotKey(None, 9, mods, vk)
+        out.append(bool(ok))
+        if ok:
+            ctypes.windll.user32.UnregisterHotKey(None, 9)
+
+    try:
+        res = []
+        t = threading.Thread(target=try_register, args=(res,)); t.start(); t.join()
+        assert res == [False]  # lo tiene la app
+        hk.pause()
+        t = threading.Thread(target=try_register, args=(res,)); t.start(); t.join()
+        assert res[-1] is True  # liberado durante la captura
+        hk.resume()
+        t = threading.Thread(target=try_register, args=(res,)); t.start(); t.join()
+        assert res[-1] is False  # vuelve a estar registrado
+    finally:
+        hk.stop()

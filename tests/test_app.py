@@ -203,3 +203,60 @@ def test_manual_label_is_nota():
     h = Harness()
     h.app.toggle()
     assert (h.sessions[0].label, h.sessions[0].exe) == ("Nota", None)
+
+
+def test_apply_setting_rejected_while_recording():
+    h = Harness()
+    h.app.toggle()
+    for key, val in [("model", "small"), ("output_dir", "C:/x"), ("language", "en")]:
+        assert h.app.apply_setting(key, val) == "No se puede cambiar mientras se graba"
+    assert h.app.settings.model == "large-v3-turbo"
+
+
+def test_apply_hotkey_calls_rebind():
+    h = Harness()
+    calls = []
+    h.app.appliers["hotkey"] = lambda v: calls.append(v)
+    assert h.app.apply_setting("hotkey", "<ctrl>+<alt>+n") is None
+    assert calls == ["<ctrl>+<alt>+n"] and h.app.settings.hotkey == "<ctrl>+<alt>+n"
+
+
+def test_apply_hotkey_error_keeps_old():
+    h = Harness()
+
+    def boom(v):
+        raise ValueError("Esa combinación ya la usa otra aplicación")
+
+    h.app.appliers["hotkey"] = boom
+    assert h.app.apply_setting("hotkey", "<ctrl>+<alt>+n") == "Esa combinación ya la usa otra aplicación"
+    assert h.app.settings.hotkey == "<ctrl>+<alt>+r"
+
+
+def test_apply_unknown_key():
+    h = Harness()
+    assert "desconocido" in h.app.apply_setting("nope", 1)
+
+
+def test_apply_auto_mode_and_saves():
+    h = Harness()
+    saved = []
+    h.app.save_settings = lambda: saved.append(True)
+    assert h.app.apply_setting("auto_mode", False) is None
+    assert h.det.suspended and h.app.state == "idle" and saved
+
+
+def test_stopping_event_before_stop():
+    h = Harness()
+    seen = []
+    h.app.on_session_stopping.append(lambda label: seen.append((label, h.sessions[0].stopped)))
+    h.app.toggle()
+    h.app.toggle()
+    assert seen == [("Nota", False)]
+
+
+def test_after_apply_runs_with_new_value():
+    h = Harness()
+    seen = []
+    h.app.after_apply["model"] = lambda v: seen.append(h.app.settings.model)
+    assert h.app.apply_setting("model", "small") is None
+    assert seen == ["small"]

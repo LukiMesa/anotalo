@@ -44,7 +44,9 @@ class Api:
         folder_dialog: Callable[[], Path | None] = lambda: None,
         today: Callable[[], date] = date.today,
         device_info: Callable[[], str] = lambda: "",
+        hotkey_capture: Callable[[bool], None] = lambda on: None,
     ):
+        self._hotkey_capture = hotkey_capture
         self._app = app
         self._copy = clipboard_set
         self._save_dialog = save_dialog
@@ -193,6 +195,25 @@ class Api:
 
     def set_hotkey(self, spec: str) -> dict:
         return self.set_setting("hotkey", spec)
+
+    def begin_hotkey_capture(self) -> dict:
+        """Mientras la ventana escucha un atajo nuevo, el global se suelta para poder pulsarlo."""
+        try:
+            self._hotkey_capture(True)
+        except Exception:  # noqa: BLE001
+            log.exception("No se pudo pausar el atajo")
+        return {"ok": True}
+
+    def end_hotkey_capture(self) -> dict:
+        try:
+            self._hotkey_capture(False)
+        except Exception:  # noqa: BLE001
+            log.exception("No se pudo reanudar el atajo")
+        return {"ok": True}
+
+    def log_js(self, message: str) -> dict:
+        log.warning("Ventana: %s", str(message)[:2000])
+        return {"ok": True}
 
     def choose_folder(self) -> dict:
         p = self._folder_dialog()

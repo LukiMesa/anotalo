@@ -40,7 +40,13 @@ class App:
         self.on_session_start: list[Callable[[str], None]] = []
         self.on_session_end: list[Callable[[Path | None, str, bool], None]] = []
         self.on_level: list[Callable[[float], None]] = []
+        self.on_session_stopping: list[Callable[[str], None]] = []
         self._label: str | None = None
+        # ajuste → función que lo aplica en vivo (la rellena main); puede lanzar con un mensaje
+        self.appliers: dict[str, Callable[[object], None]] = {}
+        self.save_settings: Callable[[], None] = lambda: None
+        # ajuste → acción tras guardarlo (p. ej. recargar el modelo)
+        self.after_apply: dict[str, Callable[[object], None]] = {}
         self.last_path: Path | None = None
         self._wait_ready = wait_ready or (lambda timeout: True)
         self._stopping = False
@@ -155,6 +161,11 @@ class App:
         session, was_auto, label = self._session, self._session_auto, self._label
         self._session, self._session_auto, self._label = None, False, None
         path, copied = None, False
+        for cb in list(self.on_session_stopping):
+            try:
+                cb(label or "")
+            except Exception:  # noqa: BLE001
+                log.exception("Error en listener de parada")
         try:
             path = session.stop()
             self.last_path = path
@@ -195,3 +206,35 @@ class App:
                 cb(rms)
             except Exception:  # noqa: BLE001
                 log.exception("Error en listener de nivel")
+
+    # --- ajustes desde la ventana -----------------------------------------
+    BLOCKED_WHILE_RECORDING = {"model", "language", "output_dir", "label_me", "label_others", "device"}
+
+    def apply_setting(self, key: str, value) -> str | None:
+        """Aplica un ajuste en vivo. Devuelve un mensaje de error o None si fue bien."""
+        if not hasattr(self.settings, key):
+            return f"Ajuste desconocido: {key}"
+        if key in self.BLOCKED_WHILE_RECORDING and self._session is not None:
+            return "No se puede cambiar mientras se graba"
+        if key == "auto_mode":
+            self.set_auto(bool(value))
+        else:
+            hook = self.appliers.get(key)
+            if hook is not None:
+                try:
+                    hook(value)
+                except Exception as e:  # noqa: BLE001 - el mensaje va a la ventana
+                    return str(e) or "No se pudo aplicar el ajuste"
+            setattr(self.settings, key, value)
+        try:
+            self.save_settings()
+        except Exception:  # noqa: BLE001
+            log.exception("No se pudieron guardar los ajustes")
+        after = self.after_apply.get(key)
+        if after is not None:
+            try:
+                after(value)
+            except Exception:  # noqa: BLE001
+                log.exception("Error tras aplicar %s", key)
+        self._changed()
+        return None

@@ -1,3 +1,5 @@
+window.addEventListener("error", (e) => { try { window.pywebview.api.log_js(`${e.message} @ ${e.filename}:${e.lineno}`); } catch (_) {} });
+window.addEventListener("unhandledrejection", (e) => { try { window.pywebview.api.log_js(String(e.reason)); } catch (_) {} });
 // Ventana principal. Habla con Python vía window.pywebview.api; Python avisa con window.onEvent().
 const S = { view: "recordings", kind: "all", query: "", selected: null, items: [], settings: {}, state: {} };
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -61,7 +63,7 @@ function renderList() {
     html += `<button class="item" role="option" data-id="${esc(it.id)}" aria-selected="${it.id === S.selected}">
       <span class="ico">${icon(it.kind === "note" ? "mic" : "phone")}</span>
       <span class="it"><span class="top">${esc(it.title)}${chip}<span class="time">${esc(time)}</span></span>
-      <span class="snip">${esc(it.snippet) || "<i>Sin texto todavía</i>"}</span></span></button>`;
+      <span class="snip">${esc(it.snippet) || (it.live ? "<i>Sin texto todavía</i>" : "<i>Sin texto</i>")}</span></span></button>`;
   }
   box.innerHTML = html;
   $$(".item", box).forEach((b) => b.addEventListener("click", () => select(b.dataset.id)));
@@ -185,6 +187,7 @@ $("#choose-folder").onclick = async () => {
 // Captura del atajo
 let listening = false;
 function renderKeyfield(on) {
+  if (on !== listening) (on ? api().begin_hotkey_capture() : api().end_hotkey_capture());
   listening = on;
   const f = $("#keyfield");
   f.classList.toggle("listening", on);
@@ -194,10 +197,15 @@ function renderKeyfield(on) {
   if (!on) $(".edit", f).onclick = () => { renderKeyfield(true); $("#hotkey-err").textContent = ""; };
 }
 function specFromEvent(e) {
+  // e.keyCode como respaldo: algunos teclados/entradas no rellenan e.code
   let key = null;
+  const kc = e.keyCode;
   if (/^Key[A-Z]$/.test(e.code)) key = e.code.slice(3).toLowerCase();
   else if (/^Digit\d$/.test(e.code)) key = e.code.slice(5);
   else if (/^F\d{1,2}$/.test(e.code)) key = `<${e.code.toLowerCase()}>`;
+  else if (kc >= 65 && kc <= 90) key = String.fromCharCode(kc).toLowerCase();
+  else if (kc >= 48 && kc <= 57) key = String.fromCharCode(kc);
+  else if (kc >= 112 && kc <= 135) key = `<f${kc - 111}>`;
   if (!key) return null;
   const mods = [e.ctrlKey && "<ctrl>", e.altKey && "<alt>", e.shiftKey && "<shift>", e.metaKey && "<cmd>"].filter(Boolean);
   return [...mods, key].join("+");

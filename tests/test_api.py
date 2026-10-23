@@ -146,3 +146,17 @@ def test_unknown_id_is_error_not_exception(env):
     api, *_ = env
     assert api.get_recording("../../etc.md")["ok"] is False
     assert api.copy("no-existe.md")["ok"] is False
+
+
+def test_hotkey_capture_hook(env):
+    api, app, *_ = env
+    calls = []
+    api._hotkey_capture = calls.append
+    assert api.begin_hotkey_capture() == {"ok": True}
+    assert api.end_hotkey_capture() == {"ok": True}
+    assert calls == [True, False]
+
+
+def test_log_js_never_raises(env):
+    api, *_ = env
+    assert api.log_js("TypeError: x is undefined") == {"ok": True}
