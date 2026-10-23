@@ -59,3 +59,14 @@ def test_concurrent_reloads_serialized():
         t.join()
     assert h.current is made[-1]
     assert all(m.stopped for m in made[:-1])
+
+
+def test_holder_reports_progress():
+    class ProgT(FakeT):
+        def start(self, on_progress=None):
+            on_progress(0.5, "Descargando modelo")
+
+    seen = []
+    h = ModelHolder(lambda: ProgT("a"), busy=lambda: False)
+    h.reload_sync(on_progress=lambda p, m: seen.append((p, m)))
+    assert seen == [(0.5, "Descargando modelo")]

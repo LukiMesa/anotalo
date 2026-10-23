@@ -270,3 +270,28 @@ def test_setting_blocked_while_stopping():
     h.app.toggle()
     assert seen == ["No se puede cambiar mientras se graba"]
     assert h.app.busy is False
+
+
+def test_toggle_while_preparing_notifies_no_session():
+    h = Harness()
+    h.app.set_preparing((0.4, "Descargando"))
+    h.app.toggle()
+    assert h.sessions == []
+    assert any("preparando" in n[0].lower() for n in h.notes)
+
+
+def test_call_start_while_preparing_ignored():
+    h = Harness()
+    h.app.set_preparing((0.1, "Descargando"))
+    h.det.on_start(CallApp.TEAMS)
+    assert h.sessions == []
+
+
+def test_state_preparing():
+    h = Harness()
+    states = []
+    h.app.on_state_change.append(states.append)
+    h.app.set_preparing((0.5, "x"))
+    assert h.app.state == "preparing" and states[-1] == "preparing"
+    h.app.set_preparing(None)
+    assert h.app.state == "armed"

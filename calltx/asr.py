@@ -84,7 +84,35 @@ def _add_cuda_dll_dirs() -> None:
                 os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
 
 
-def _default_factory(model: str, device: str, compute_type: str) -> Any:
+def _download_with_progress(model: str, on_progress) -> str:
+    """Descarga el modelo de Hugging Face informando del progreso (bytes de todos los archivos)."""
+    from faster_whisper.utils import _MODELS
+    from huggingface_hub import snapshot_download
+    from tqdm.auto import tqdm
+
+    repo = _MODELS.get(model, model)
+    bars: dict[int, tuple[float, float]] = {}
+
+    class Bar(tqdm):
+        def __init__(self, *a, **k):
+            k["disable"] = False
+            super().__init__(*a, **k)
+
+        def update(self, n=1):
+            r = super().update(n)
+            if getattr(self, "unit", "") == "B" and self.total:
+                bars[id(self)] = (self.n, self.total)
+                done = sum(v[0] for v in bars.values())
+                tot = sum(v[1] for v in bars.values())
+                if tot:
+                    on_progress(min(0.99, done / tot), f"Descargando modelo {model}")
+            return r
+
+    allow = ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.*"]
+    return snapshot_download(repo, allow_patterns=allow, tqdm_class=Bar)
+
+
+def _default_factory(model: str, device: str, compute_type: str, on_progress=None) -> Any:
     from faster_whisper import WhisperModel
 
     if device == "cuda":
@@ -94,6 +122,9 @@ def _default_factory(model: str, device: str, compute_type: str) -> Any:
         return WhisperModel(model, device=device, compute_type=compute_type, local_files_only=True)
     except Exception:  # noqa: BLE001 - no está en caché: descarga (solo la primera vez)
         log.info("Descargando modelo %s…", model)
+        if on_progress is not None:
+            path = _download_with_progress(model, on_progress)
+            return WhisperModel(path, device=device, compute_type=compute_type)
         return WhisperModel(model, device=device, compute_type=compute_type)
 
 
@@ -112,10 +143,11 @@ class Transcriber:
         self.model_name = self.resolved.model
         self.fallback_used = False
 
-    def start(self) -> None:
+    def start(self, on_progress=None) -> None:
+        extra = {"on_progress": on_progress} if on_progress is not None else {}
         try:
             r = self.resolved
-            self._model = self._factory(model=r.model, device=r.device, compute_type=r.compute_type)
+            self._model = self._factory(model=r.model, device=r.device, compute_type=r.compute_type, **extra)
             self.warmup()
         except Exception as e:  # noqa: BLE001 - cualquier fallo de CUDA → CPU
             if self.resolved.device == "cpu":
@@ -126,7 +158,7 @@ class Transcriber:
             log.warning("No se pudo usar la GPU (%s); paso al procesador con '%s'", e, fb.model)
             self.fallback_used = True
             self.device, self.model_name = "cpu", fb.model
-            self._model = self._factory(model=fb.model, device="cpu", compute_type=fb.compute_type)
+            self._model = self._factory(model=fb.model, device="cpu", compute_type=fb.compute_type, **extra)
             self.warmup()
         self._thread = threading.Thread(target=self._run, name="asr", daemon=True)
         self._thread.start()

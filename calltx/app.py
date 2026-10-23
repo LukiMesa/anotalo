@@ -12,7 +12,7 @@ from .detector import CallApp
 
 log = logging.getLogger(__name__)
 
-State = Literal["idle", "armed", "recording"]
+State = Literal["idle", "armed", "recording", "preparing"]
 NOTE_LABEL = "Nota"
 EXE_FOR_APP = {CallApp.TEAMS: "ms-teams.exe", CallApp.MEET: "firefox.exe"}
 
@@ -43,6 +43,7 @@ class App:
         self.on_session_stopping: list[Callable[[str], None]] = []
         self._label: str | None = None
         self.busy = False  # True mientras se cierra una grabación (últimas frases)
+        self.preparing: tuple[float, str] | None = None  # (progreso 0-1, texto) en el primer uso
         # ajuste → función que lo aplica en vivo (la rellena main); puede lanzar con un mensaje
         self.appliers: dict[str, Callable[[object], None]] = {}
         self.save_settings: Callable[[], None] = lambda: None
@@ -57,7 +58,13 @@ class App:
     def state(self) -> State:
         if self._session is not None:
             return "recording"
+        if self.preparing is not None:
+            return "preparing"
         return "armed" if self.settings.auto_mode else "idle"
+
+    def set_preparing(self, value: tuple[float, str] | None) -> None:
+        self.preparing = value
+        self._changed()
 
     @property
     def session(self):
@@ -105,13 +112,11 @@ class App:
         self.start_manual()
 
     def _model_ready(self) -> bool:
-        """Espera al modelo SIN tener el lock (la primera vez puede tardar en descargarse)."""
-        if self._wait_ready(0):
+        """No bloquea: mientras se prepara el modelo (descargas del primer uso) no se graba."""
+        if self.preparing is None and self._wait_ready(0):
             return True
-        self._notify("Cargando modelo", "La grabación empezará cuando el modelo esté listo")
-        if self._wait_ready(600):
-            return True
-        self._notify("Error al grabar", "El modelo de transcripción no se pudo cargar")
+        pct = f" ({int(self.preparing[0] * 100)} %)" if self.preparing else ""
+        self._notify("Aún preparando el modelo", f"Podrás grabar en cuanto termine{pct}")
         return False
 
     def start_manual(self) -> None:

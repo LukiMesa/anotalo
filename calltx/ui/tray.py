@@ -9,8 +9,9 @@ import pystray
 from PIL import Image, ImageDraw
 
 # Colores: acero oscuro (inactivo), órbita (esperando), error (grabando)
-STATE_COLORS = {"idle": (107, 125, 146), "armed": (46, 197, 230), "recording": (255, 122, 122)}
-STATE_TEXT = {"idle": "Inactivo", "armed": "Esperando llamada", "recording": "Grabando"}
+STATE_COLORS = {"idle": (107, 125, 146), "armed": (46, 197, 230), "recording": (255, 122, 122),
+                "preparing": (90, 104, 131)}
+STATE_TEXT = {"idle": "Inactivo", "armed": "Esperando llamada", "recording": "Grabando", "preparing": "Preparando…"}
 NAVY = (22, 28, 43, 255)
 
 
@@ -55,9 +56,12 @@ class Tray:
         app.on_state_change.append(self.update)
 
     def update(self, state: str) -> None:
-        self._icon.icon = _icon(STATE_COLORS[state])
-        self._icon.title = f"Transcriptor de llamadas — {STATE_TEXT[state]}"
+        self._icon.icon = _icon(STATE_COLORS.get(state, STATE_COLORS["idle"]))
+        self._icon.title = f"Transcriptor de llamadas — {STATE_TEXT.get(state, '')}"
         self._icon.update_menu()
+
+    def set_tip(self, text: str | None) -> None:
+        self._icon.title = f"Transcriptor de llamadas — {text}" if text else "Transcriptor de llamadas"
 
     def run_detached(self) -> None:
         self._icon.run_detached()

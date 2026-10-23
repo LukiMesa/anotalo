@@ -26,11 +26,14 @@ class ModelHolder:
         self.ready = threading.Event()
         self.last_error: str | None = None
 
-    def reload_sync(self) -> bool:
+    def reload_sync(self, on_progress=None) -> bool:
         with self._reload_lock:
             new = self._factory()
             try:
-                new.start()
+                if on_progress is not None:
+                    new.start(on_progress=on_progress)
+                else:
+                    new.start()
             except Exception as e:  # noqa: BLE001
                 log.exception("No se pudo cargar el modelo")
                 self.last_error = str(e)

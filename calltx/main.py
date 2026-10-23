@@ -132,19 +132,52 @@ def main() -> int:
     # --- modelo (se puede recargar desde Ajustes; ver calltx/models.py) -----
     from .models import ModelHolder
 
+    from .cuda_setup import CudaSetup, CudaSetupError
+    from .device import cpu_fallback, has_nvidia_driver, resolve
+    from .paths import cuda_dir, is_frozen
+
     gpu = {"name": ""}
     holder_app: dict = {}
-    models = ModelHolder(lambda: Transcriber(settings),
+    plan = {"resolved": None}
+    models = ModelHolder(lambda: Transcriber(settings, resolved=plan["resolved"]),
                          busy=lambda: holder_app["app"].state == "recording" or holder_app["app"].busy)
 
+    def preparing(progress: float, text: str) -> None:
+        holder_app["app"].set_preparing((progress, text))
+        tray_tip(f"Preparando… {int(progress * 100)} %")
+
     def load_model():
-        log.info("Cargando modelo (ajuste %s / %s)…", settings.model, settings.device)
-        if models.reload_sync():
+        app_ = holder_app["app"]
+        app_.set_preparing((0.0, "Cargando modelo…"))
+        nvidia = has_nvidia_driver()
+        cuda = CudaSetup(cuda_dir())
+        # En desarrollo las DLL de CUDA vienen del entorno de pip.
+        cuda_ready = (not is_frozen()) or cuda.is_ready()
+        r = resolve(settings, nvidia, cuda_ready)
+        if r.needs_cuda:
+            try:
+                cuda.run(lambda pr, msg: preparing(pr * 0.6, msg))
+            except CudaSetupError as e:
+                log.warning("GPU no disponible en esta sesión: %s", e)
+                _notifier("No se pudo preparar la GPU", "Esta vez uso el procesador; lo reintentaré al reiniciar.")
+                r = cpu_fallback(settings)
+        plan["resolved"] = r
+        log.info("Cargando modelo %s en %s…", r.model, r.device)
+        base = 0.6 if r.device == "cuda" and not cuda_ready else 0.0
+        ok = models.reload_sync(on_progress=lambda pr, msg: preparing(base + pr * (1 - base), msg))
+        if ok:
             t = models.current
             log.info("Modelo listo (%s%s)", t.device, ", modo de respaldo" if t.fallback_used else "")
         else:
             _notifier("Error", "No se pudo cargar el modelo de transcripción. Revisa app.log")
+        app_.set_preparing(None)
+        tray_tip(None)
         push_state()
+
+    def tray_tip(text):
+        t = holder_app.get("tray")
+        if t is not None:
+            t.set_tip(text)
 
     def device_info() -> str:
         t = models.current
@@ -194,7 +227,9 @@ def main() -> int:
     holder["win"] = win
 
     def push_state(*_):
-        win.push({"type": "state", "state": app.state, "hotkey": settings.hotkey, "device": device_info()})
+        win.push({"type": "state", "state": app.state, "hotkey": settings.hotkey, "device": device_info(),
+                  "progress": app.preparing[0] if app.preparing else None,
+                  "progress_text": app.preparing[1] if app.preparing else ""})
 
     app.on_state_change.append(push_state)
 
@@ -258,6 +293,7 @@ def main() -> int:
         win.destroy()
 
     tray = Tray(app, win.show, lambda: os.startfile(settings.output_dir), quit_all)
+    holder_app["tray"] = tray
     _wait_show_requests(win.show)
 
     def bootstrap():

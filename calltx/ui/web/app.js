@@ -143,9 +143,10 @@ window.onEvent = (evt) => {
 };
 function renderState(st) {
   S.state = { ...S.state, ...st };
-  const labels = { idle: "Inactivo", armed: "Esperando llamada", recording: "Grabando" };
+  const labels = { idle: "Inactivo", armed: "Esperando llamada", recording: "Grabando", preparing: "Preparando…" };
   $("#state-dot").className = "dot " + S.state.state;
-  $("#state-text").textContent = labels[S.state.state] || "";
+  $("#state-text").textContent = S.state.state === "preparing" && S.state.progress != null
+    ? `Preparando… ${Math.round(S.state.progress * 100)} %` : (labels[S.state.state] || "");
   $("#state-keys").innerHTML = keysHtml(S.state.hotkey);
   if (S.state.device) $("#device").textContent = S.state.device;
   if (S.state.version) $("#version").textContent = "Versión " + S.state.version;
