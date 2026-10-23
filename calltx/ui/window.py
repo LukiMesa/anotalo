@@ -11,7 +11,9 @@ import webview
 
 log = logging.getLogger(__name__)
 
-WEB_DIR = Path(__file__).parent / "web"
+from ..paths import web_dir
+
+WEB_DIR = web_dir()
 
 
 class MainWindow:

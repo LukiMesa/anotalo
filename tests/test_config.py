@@ -7,7 +7,7 @@ def test_defaults(tmp_path):
     s = load_settings(tmp_path / "missing.json")
     assert s.label_me == "Yo"
     assert s.label_others == "Otros"
-    assert s.model == "large-v3-turbo"
+    assert s.model == "auto"
     assert s.language == "es"
 
 
@@ -29,7 +29,7 @@ def test_partial_file_keeps_defaults(tmp_path):
     p.write_text(json.dumps({"auto_mode": False}), encoding="utf-8")
     s = load_settings(p)
     assert s.auto_mode is False
-    assert s.model == "large-v3-turbo"
+    assert s.model == "auto"
 
 
 def test_corrupt_file_gives_defaults(tmp_path):
@@ -43,3 +43,15 @@ def test_new_defaults():
     assert s.copy_on_stop is True and s.show_indicator is True
     assert s.autostart is True and s.autostart_configured is False
     assert s.detect_teams is True and s.detect_meet is True
+
+
+def test_defaults_auto():
+    s = Settings()
+    assert s.device == "auto" and s.model == "auto"
+
+
+def test_migrate_cuda_to_auto(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"device": "cuda", "model": "large-v3-turbo", "compute_type": "float16"}), encoding="utf-8")
+    s = load_settings(p)
+    assert s.device == "auto" and s.model == "large-v3-turbo"

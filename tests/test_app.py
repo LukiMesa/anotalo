@@ -210,7 +210,7 @@ def test_apply_setting_rejected_while_recording():
     h.app.toggle()
     for key, val in [("model", "small"), ("output_dir", "C:/x"), ("language", "en")]:
         assert h.app.apply_setting(key, val) == "No se puede cambiar mientras se graba"
-    assert h.app.settings.model == "large-v3-turbo"
+    assert h.app.settings.model == "auto"
 
 
 def test_apply_hotkey_calls_rebind():

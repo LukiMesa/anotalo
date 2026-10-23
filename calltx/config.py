@@ -12,14 +12,16 @@ log = logging.getLogger(__name__)
 
 
 def _default_output_dir() -> str:
-    return str(Path.home() / "Documents" / "Llamadas")
+    from .paths import default_output_dir
+
+    return str(default_output_dir())
 
 
 @dataclass
 class Settings:
-    model: str = "large-v3-turbo"
+    model: str = "auto"  # auto = large-v3-turbo con GPU, small con procesador
     language: str = "es"
-    device: str = "cuda"
+    device: str = "auto"  # auto | cuda | cpu
     compute_type: str = "float16"
     label_me: str = "Yo"
     label_others: str = "Otros"
@@ -40,8 +42,9 @@ class Settings:
 
 
 def default_config_path() -> Path:
-    base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
-    return Path(base) / "CallTranscriber" / "config.json"
+    from .paths import data_dir
+
+    return data_dir() / "config.json"
 
 
 def load_settings(path: Path | None = None) -> Settings:
@@ -55,6 +58,8 @@ def load_settings(path: Path | None = None) -> Settings:
     except (OSError, ValueError) as e:
         log.warning("Config inválida en %s (%s); uso valores por defecto", path, e)
         return Settings()
+    if data.get("device") == "cuda":  # versiones anteriores: ahora se decide solo
+        data["device"] = "auto"
     known = {f.name for f in fields(Settings)}
     return Settings(**{k: v for k, v in data.items() if k in known})
 

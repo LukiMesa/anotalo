@@ -32,7 +32,7 @@ EXITO = (61, 220, 151, 255)  # --exito
 LINE_STRONG = (90, 104, 131, 255)  # --line-strong
 
 SS = 3  # supermuestreo
-FONT_PATH = Path(__file__).parent / "web" / "fonts" / "JetBrainsMono.ttf"
+FONT_PATH = Path(__file__).parent / "web" / "fonts" / "JetBrainsMono.ttf"  # también vale empaquetado (calltx/ui/web)
 TEXTS = {"transcribing": "Transcribiendo…", "copied": "Copiado al portapapeles", "saved": "Transcripción guardada"}
 
 _font_cache: dict[int, ImageFont.FreeTypeFont] = {}
