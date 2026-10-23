@@ -24,7 +24,8 @@ Requisitos: Windows 10/11 de 64 bits y Microsoft Edge WebView2 (viene con Window
 ## Crear una versión nueva
 
 ```powershell
-.\scriptsuild.ps1     # tests + ejecutable (PyInstaller) + instalador (Inno Setup) → dist.\scriptselease.ps1   # publica dist\Transcriptor-Setup-<versión>.exe como Release en GitHub
+.\scripts\build.ps1     # tests + ejecutable (PyInstaller) + instalador (Inno Setup) -> dist\
+.\scripts\release.ps1   # publica dist\Transcriptor-Setup-<versión>.exe como Release en GitHub
 ```
 
 La versión sale de `calltx/__init__.py`. Requiere Inno Setup 6 (`winget install JRSoftware.InnoSetup`) y `gh` con sesión iniciada.
