@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "calltx"
+version = "0.1.0"
+description = "Transcriptor local de llamadas (Teams / Meet) con faster-whisper"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "faster-whisper>=1.2",
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12>=9,<10",
+    "onnxruntime>=1.20",
+    "numpy>=2",
+    "soxr>=0.5",
+    "pyaudiowpatch>=0.2.12",
+    "comtypes>=1.4",
+    "psutil>=6",
+    "pystray>=0.19",
+    "pillow>=10",
+    "pynput>=1.8",
+    "winotify>=1.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["calltx*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
