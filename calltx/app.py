@@ -23,6 +23,7 @@ class App:
         detector_factory: Callable,
         session_factory: Callable,  # (label, exe|None, on_line) -> session
         notifier: Callable[..., None],
+        wait_ready: Callable[[float], bool] | None = None,
     ):
         self.settings = settings
         self._detector = detector_factory(self.on_call_start, self.on_call_stop)
@@ -35,6 +36,8 @@ class App:
         self.on_line: list[Callable[[str, str, float, str], None]] = []
         self.on_session_start: list[Callable[[str], None]] = []
         self.last_path: Path | None = None
+        self._wait_ready = wait_ready or (lambda timeout: True)
+        self._stopping = False
 
     # --- estado ------------------------------------------------------------
     @property
@@ -74,22 +77,35 @@ class App:
         self._changed()
 
     def quit(self) -> None:
+        self._stopping = True
+        self._detector.stop()  # fuera del lock: el detector puede estar esperándolo
         with self._lock:
             if self._session is not None:
                 self._stop_session(user=True)
-            self._detector.stop()
 
     # --- acciones ----------------------------------------------------------
     def toggle(self) -> None:
         with self._lock:
             if self._session is not None:
                 self._stop_session(user=True)
-            else:
-                self.start_manual()
+                return
+        self.start_manual()
+
+    def _model_ready(self) -> bool:
+        """Espera al modelo SIN tener el lock (la primera vez puede tardar en descargarse)."""
+        if self._wait_ready(0):
+            return True
+        self._notify("Cargando modelo", "La grabación empezará cuando el modelo esté listo")
+        if self._wait_ready(600):
+            return True
+        self._notify("Error al grabar", "El modelo de transcripción no se pudo cargar")
+        return False
 
     def start_manual(self) -> None:
+        if self._stopping or not self._model_ready():
+            return
         with self._lock:
-            if self._session is not None:
+            if self._session is not None or self._stopping:
                 return
             self._begin("Manual", None, auto=False)
 
@@ -100,8 +116,10 @@ class App:
         self._changed()
 
     def on_call_start(self, app: CallApp) -> None:
+        if self._stopping or not self._model_ready():
+            return
         with self._lock:
-            if self._session is not None:
+            if self._session is not None or self._stopping:
                 return
             self._begin(app.value, EXE_FOR_APP[app], auto=True)
 

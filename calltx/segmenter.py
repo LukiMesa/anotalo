@@ -11,7 +11,8 @@ import numpy as np
 SR = 16000
 FRAME = 512
 FRAME_S = FRAME / SR
-GAP_TOLERANCE_S = 0.05
+# Retrasos de callback por debajo de esto son jitter, no huecos reales.
+GAP_TOLERANCE_S = 0.5
 TRAILING_KEEP_S = 0.2
 
 
@@ -65,9 +66,17 @@ class Segmenter:
             expected = self._buf_t + len(self._buf) / SR
             gap = t_s - expected
             if gap > GAP_TOLERANCE_S:
-                self._on_gap(gap)
+                # Procesa lo que quedaba en el buffer (relleno con ceros) antes del hueco.
+                if len(self._buf):
+                    pad = np.zeros(FRAME - len(self._buf), dtype=np.float32)
+                    self._process(self._buf_t, np.concatenate([self._buf, pad]))
+                    gap -= len(pad) / SR
+                self._on_gap(max(0.0, gap))
                 self._buf = np.zeros(0, dtype=np.float32)
                 self._buf_t = t_s
+            elif gap < -GAP_TOLERANCE_S:
+                # El reloj del dispositivo va por delante: realinea el tiempo sin tirar audio.
+                self._buf_t = t_s - len(self._buf) / SR
         self._buf = np.concatenate([self._buf, np.asarray(samples, dtype=np.float32)])
         n = len(self._buf) // FRAME
         for i in range(n):
@@ -76,6 +85,14 @@ class Segmenter:
         if n:
             self._buf = self._buf[n * FRAME :]
             self._buf_t += n * FRAME_S
+
+    def idle(self, t_s: float) -> None:
+        """Marca de reloj sin audio: si la fuente dejó de mandar paquetes, cierra la frase abierta."""
+        if not self._in_speech or self._buf_t is None:
+            return
+        gap = t_s - (self._buf_t + len(self._buf) / SR)
+        if gap > 0 and self._silence_run + gap >= self._silence_s:
+            self._finish()
 
     def flush(self) -> None:
         if self._in_speech:

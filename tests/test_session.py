@@ -41,8 +41,8 @@ class FakeTranscriber:
     def submit(self, seg, cb):
         cb(seg, f"texto de {seg.speaker}")
 
-    def wait_idle(self):
-        pass
+    def wait_idle(self, timeout=None):
+        return True
 
 
 def make(tmp_path, mic, others, lines=None):
@@ -90,3 +90,26 @@ def test_source_failure_reopens(tmp_path):
     path = sess.stop()
     assert others.starts == 2
     assert "Otros:**" in path.read_text(encoding="utf-8")
+
+
+class DeadSource(FakeSource):
+    def is_active(self):
+        return False
+
+
+def test_dead_others_source_is_recreated(tmp_path):
+    made = []
+
+    def factory():
+        s = FakeSource("others", 0.5)
+        made.append(s)
+        return s
+
+    s = Settings(output_dir=str(tmp_path))
+    sess = CallSession(s, FakeTranscriber(), "Teams", FakeSource("mic", 0.5), DeadSource("others", 0.5),
+                       vad_factory=fake_vad_factory, clock=lambda: T0, retry_delay_s=0.0, others_factory=factory)
+    sess.start()
+    import time as _t
+    _t.sleep(1.2)
+    sess.stop()
+    assert made, "others_factory no se usó para recrear la fuente"

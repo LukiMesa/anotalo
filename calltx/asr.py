@@ -8,6 +8,7 @@ import queue
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -34,6 +35,16 @@ _BLOCKLIST = {
 }
 
 
+# Frases típicas que Whisper inventa sobre ruido (vienen de subtítulos de YouTube).
+_PATTERNS = [
+    re.compile(r"\bsuscr[ií]bete\b"),
+    re.compile(r"\bamara ?org\b"),
+    re.compile(r"^gracias por (ver|vernos|su atención)"),
+    re.compile(r"\bdale (a )?like\b"),
+    re.compile(r"^subt[ií]tulos (realizados )?por\b"),
+]
+
+
 def _normalize(text: str) -> str:
     t = re.sub(r"[^\w\s]", "", text.lower())
     return " ".join(t.split())
@@ -45,7 +56,9 @@ def is_hallucination(text: str, avg_logprob: float, no_speech_prob: float) -> bo
         return True
     if no_speech_prob > 0.6 and avg_logprob < -1.0:
         return True
-    return norm in _BLOCKLIST
+    if norm in _BLOCKLIST:
+        return True
+    return any(pat.search(norm) for pat in _PATTERNS)
 
 
 def _add_cuda_dll_dirs() -> None:
@@ -107,9 +120,20 @@ class Transcriber:
     def submit(self, seg: Segment, on_result: ResultCb) -> None:
         self._q.put((seg, on_result))
 
-    def wait_idle(self) -> None:
-        """Bloquea hasta que todo lo enviado se haya transcrito."""
-        self._q.join()
+    def wait_idle(self, timeout: float | None = None) -> bool:
+        """Espera a que todo lo enviado se haya transcrito. False si vence el plazo."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with self._q.all_tasks_done:
+            while self._q.unfinished_tasks:
+                if deadline is None:
+                    self._q.all_tasks_done.wait()
+                else:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        log.warning("Quedan %d frases sin transcribir", self._q.unfinished_tasks)
+                        return False
+                    self._q.all_tasks_done.wait(left)
+        return True
 
     def stop(self) -> None:
         if self._thread is None:

@@ -134,3 +134,13 @@ def test_dismissed_call_not_restarted_and_no_stop_event():
     w.mic = {TEAMS}
     w.advance(d, 8)
     assert w.events == [("start", CallApp.TEAMS), ("start", CallApp.TEAMS)]
+
+
+def test_meet_title_matching():
+    from calltx.detector import is_meet_title
+
+    assert is_meet_title("Meet - abc-defg-hij — Mozilla Firefox")
+    assert is_meet_title("Meet – Reunión semanal — Mozilla Firefox")
+    assert is_meet_title("Google Meet — Mozilla Firefox")
+    assert not is_meet_title("Meeting notes – Google Docs — Mozilla Firefox")
+    assert not is_meet_title("Meetup: Python Madrid — Mozilla Firefox")

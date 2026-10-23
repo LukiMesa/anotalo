@@ -96,3 +96,13 @@ def test_name_collision(tmp_path):
     b, _ = make(tmp_path)
     assert a.path != b.path
     assert b.path.name == "2026-10-23_1504_Teams_2.md"
+
+
+def test_long_merged_run_reaches_disk(tmp_path):
+    # El cliente habla 60 s con pausas cortas: lo dicho debe llegar a disco sin esperar a que calle.
+    w, clock = make(tmp_path)
+    for i in range(30):
+        clock.t = i * 2.0
+        w.add("Otros", i * 2.0, f"frase{i}", end_s=i * 2.0 + 1.5)
+        w.flush_due()
+    assert "frase0" in w.path.read_text(encoding="utf-8")

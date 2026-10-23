@@ -252,7 +252,9 @@ class ProcessLoopbackSource:
             self._thread = None
 
     def is_active(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        import psutil
+
+        return self._thread is not None and self._thread.is_alive() and psutil.pid_exists(self.pid)
 
     def _run(self, on_audio: OnAudio) -> None:
         comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)

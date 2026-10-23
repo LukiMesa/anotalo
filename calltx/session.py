@@ -31,7 +31,7 @@ class _Lane:
         self.source = source
         self.segmenter = segmenter
         self.t0 = t0
-        self.q: queue.Queue[tuple[float, np.ndarray] | None] = queue.Queue()
+        self.q: queue.Queue[tuple[float, np.ndarray | None] | None] = queue.Queue()
         self.thread = threading.Thread(target=self._run, name=f"lane-{source.name}", daemon=True)
         self.failures = 0
 
@@ -46,7 +46,10 @@ class _Lane:
                 return
             t, x = item
             try:
-                self.segmenter.feed(t - self.t0, x)
+                if x is None:
+                    self.segmenter.idle(t - self.t0)
+                else:
+                    self.segmenter.feed(t - self.t0, x)
             except Exception:  # noqa: BLE001
                 log.exception("Error procesando audio de %s", self.source.name)
 
@@ -63,6 +66,7 @@ class CallSession:
         vad_factory: Callable[[], Callable[[np.ndarray], float]] = SileroVad,
         clock: Callable[[], float] = time.monotonic,
         retry_delay_s: float = 1.0,
+        others_factory: Callable[[], AudioSource] | None = None,
     ):
         self._s = settings
         self._asr = transcriber
@@ -72,6 +76,7 @@ class CallSession:
         self._vad_factory = vad_factory
         self._clock = clock
         self._retry_delay = retry_delay_s
+        self._others_factory = others_factory
         self._lanes: list[_Lane] = []
         self._stop_evt = threading.Event()
         self._timer: threading.Thread | None = None
@@ -119,7 +124,9 @@ class CallSession:
         while not self._stop_evt.wait(0.5):
             if self.writer:
                 self.writer.flush_due()
-            for lane in self._lanes:
+            now = self._clock()
+            for i, lane in enumerate(self._lanes):
+                lane.q.put((now, None))  # marca de reloj: cierra frases si la fuente calla
                 active = getattr(lane.source, "is_active", None)
                 if active is not None and not active() and lane.failures <= MAX_RETRIES:
                     log.warning("La fuente %s se detuvo; reabriendo", lane.source.name)
@@ -128,6 +135,12 @@ class CallSession:
                     except Exception:  # noqa: BLE001
                         pass
                     lane.failures += 1
+                    if i == 1 and self._others_factory is not None:
+                        # La app de la llamada pudo reiniciarse: buscar su proceso de nuevo.
+                        try:
+                            lane.source = self._others_factory()
+                        except Exception:  # noqa: BLE001
+                            log.exception("No se pudo recrear la fuente de la llamada")
                     self._open(lane)
 
     def _on_segment(self, seg: Segment) -> None:
@@ -155,7 +168,7 @@ class CallSession:
             lane.q.put(None)
         for lane in self._lanes:
             lane.thread.join(10)
-        self._asr.wait_idle()
+        self._asr.wait_idle(timeout=60)
         assert self.writer is not None
         return self.writer.close(datetime.now())
 

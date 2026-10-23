@@ -115,3 +115,26 @@ def test_default_factory_prefers_local_files(monkeypatch):
     monkeypatch.setattr(faster_whisper, "WhisperModel", FakeWM)
     asr._default_factory(model="tiny", device="cpu", compute_type="int8")
     assert calls == [True, False]
+
+
+def test_wait_idle_times_out():
+    import time as _t
+
+    class Slow(FakeModel):
+        def transcribe(self, audio, **kw):
+            if self.calls:
+                _t.sleep(1.0)
+            return super().transcribe(audio, **kw)
+
+    t = make(Slow())
+    t.submit(seg(), lambda s, x: None)
+    assert t.wait_idle(timeout=0.1) is False
+    assert t.wait_idle(timeout=5) is True
+    t.stop()
+
+
+def test_youtube_style_hallucinations_filtered():
+    for t in ["¡Suscríbete al canal!", "Suscríbete y dale like", "Gracias por ver el vídeo.",
+              "Subtítulos por la comunidad de Amara.org", "¡Gracias por vernos!"]:
+        assert is_hallucination(t, -0.3, 0.1), t
+    assert not is_hallucination("Me suscribí al plan premium la semana pasada", -0.3, 0.1)

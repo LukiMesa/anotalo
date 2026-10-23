@@ -100,7 +100,7 @@ class TranscriptWriter:
             ):
                 last.text = f"{last.text} {text}"
                 last.end_s = max(last.end_s, end_s)
-                last.arrived = self._clock()
+                # "arrived" se queda en la primera llegada: así una racha larga llega a disco a tiempo.
             else:
                 self._pending.append(_Pending(speaker, start_s, end_s, text, self._clock()))
         return f"**[{fmt_elapsed(start_s)}] {speaker}:** {text}"

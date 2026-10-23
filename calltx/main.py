@@ -71,7 +71,12 @@ def main() -> int:
 
     def load_model():
         log.info("Cargando modelo %s en %s…", settings.model, settings.device)
-        transcriber.start()
+        try:
+            transcriber.start()
+        except Exception:  # noqa: BLE001
+            log.exception("No se pudo cargar ningún modelo de transcripción")
+            _notifier("Error", "No se pudo cargar el modelo de transcripción. Revisa app.log")
+            return
         log.info("Modelo listo (%s%s)", transcriber.device, ", modo de respaldo" if transcriber.fallback_used else "")
         ready.set()
 
@@ -86,14 +91,22 @@ def main() -> int:
         return None
 
     def session_factory(label: str, exe: str | None, on_line):
-        if not ready.wait(180):
-            raise RuntimeError("El modelo de transcripción no terminó de cargar")
         exe = exe or manual_target()
-        others = open_call_audio(find_root_pid(exe)) if exe else DefaultLoopbackSource()
-        log.info("Sesión %s: audio de la llamada desde %s", label, others.name)
-        return CallSession(settings, transcriber, label, MicSource(settings.mic_device), others, on_line=on_line)
 
-    app = App(settings, lambda on_start, on_stop: CallDetector(on_start, on_stop), session_factory, _notifier)
+        def make_others():
+            return open_call_audio(find_root_pid(exe)) if exe else DefaultLoopbackSource()
+
+        others = make_others()
+        log.info("Sesión %s: audio de la llamada desde %s", label, others.name)
+        return CallSession(
+            settings, transcriber, label, MicSource(settings.mic_device), others,
+            on_line=on_line, others_factory=make_others if exe else None,
+        )
+
+    app = App(
+        settings, lambda on_start, on_stop: CallDetector(on_start, on_stop), session_factory, _notifier,
+        wait_ready=lambda timeout: ready.wait(timeout),
+    )
 
     root = tk.Tk()
     live = LiveWindow(root, settings.label_me, lambda: app.session.text() if app.session else "")

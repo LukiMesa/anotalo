@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import re
 import threading
 import time
 from typing import Callable
@@ -72,6 +73,13 @@ def _is_firefox(key: str) -> bool:
     return key.lower().endswith("#firefox.exe")
 
 
+_MEET_TITLE = re.compile(r"^Meet\s*[-–—:]|Google Meet")
+
+
+def is_meet_title(title: str) -> bool:
+    return bool(_MEET_TITLE.search(title))
+
+
 def firefox_meet_window_open() -> bool:
     import ctypes
     from ctypes import wintypes
@@ -96,7 +104,7 @@ def firefox_meet_window_open() -> bool:
         n = user32.GetWindowTextLengthW(hwnd)
         buf = ctypes.create_unicode_buffer(n + 1)
         user32.GetWindowTextW(hwnd, buf, n + 1)
-        if "Meet" in buf.value:
+        if is_meet_title(buf.value):
             found = True
             return False
         return True

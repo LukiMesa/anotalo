@@ -125,3 +125,31 @@ def test_quit_stops_session_and_saves():
     h.app.quit()
     assert h.sessions[0].stopped
     assert not h.det.running
+
+
+def test_model_wait_does_not_hold_lock():
+    import threading
+
+    h = Harness()
+    free = []
+
+    def ready(timeout):
+        got = []
+        t = threading.Thread(target=lambda: got.append(h.app._lock.acquire(timeout=0.5)) or (got[0] and h.app._lock.release()))
+        t.start()
+        t.join()
+        free.append(got[0])
+        return True
+
+    h.app._wait_ready = ready
+    h.det.on_start(CallApp.TEAMS)
+    assert free == [True]
+    assert h.sessions and h.sessions[0].started
+
+
+def test_no_session_after_quit():
+    h = Harness()
+    h.app.quit()
+    h.det.on_start(CallApp.TEAMS)
+    h.app.toggle()
+    assert h.sessions == []

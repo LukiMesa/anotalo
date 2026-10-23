@@ -76,3 +76,40 @@ def test_silero_loads():
 
     v = SileroVad()
     assert v.prob(np.zeros(512, np.float32)) < 0.5
+
+
+def test_callback_jitter_does_not_split_or_shift():
+    # Callbacks que llegan 80 ms tarde no son huecos: una sola frase y tiempos correctos.
+    out = []
+    seg = Segmenter("Yo", fake_vad, out.append)
+    x = np.concatenate([silence(0.5), tone(3.0), silence(1.0)])
+    for n, i in enumerate(range(0, len(x), 800)):
+        jitter = 0.08 if n % 2 else 0.0
+        seg.feed(i / SR + jitter, x[i : i + 800])
+    seg.flush()
+    assert len(out) == 1
+    assert abs(out[0].start_s - 0.5) < 0.25
+    assert abs(out[0].end_s - 3.5) < 0.5
+    # 3 s de voz + ~0.2 s de pre-roll + ~0.2 s de margen final
+    assert abs(len(out[0].audio) / SR - 3.4) < 0.1
+
+
+def test_idle_finishes_open_segment():
+    out = []
+    seg = Segmenter("Otros", fake_vad, out.append)
+    x = tone(1.0)
+    for i in range(0, len(x), 160):
+        seg.feed(i / SR, x[i : i + 160])
+    seg.idle(3.0)
+    assert len(out) == 1
+
+
+def test_jitter_does_not_ratchet_later_timestamps():
+    out = []
+    seg = Segmenter("Yo", fake_vad, out.append)
+    x = np.concatenate([silence(0.5), tone(3.0), silence(2.5), tone(1.0), silence(1.0)])
+    for n, i in enumerate(range(0, len(x), 800)):
+        seg.feed(i / SR + (0.08 if n % 2 else 0.0), x[i : i + 800])
+    seg.flush()
+    assert len(out) == 2
+    assert abs(out[1].start_s - 6.0) < 0.3
