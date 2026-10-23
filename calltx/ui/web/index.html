@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transcriptor</title>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="app">
+  <aside class="side" aria-label="Navegación">
+    <div class="brand"><span class="mark" data-icon="mic"></span>Transcriptor</div>
+    <button class="nav" data-view="recordings" aria-current="page"><span data-icon="list"></span>Grabaciones<span class="count" id="count"></span></button>
+    <div class="group">Ajustes</div>
+    <button class="nav" data-view="hotkey"><span data-icon="keyboard"></span>Atajo y grabación</button>
+    <button class="nav" data-view="calls"><span data-icon="phone"></span>Llamadas</button>
+    <button class="nav" data-view="model"><span data-icon="chip"></span>Modelo e idioma</button>
+    <button class="nav" data-view="general"><span data-icon="gear"></span>General</button>
+    <div class="status" aria-live="polite">
+      <div class="row"><span class="dot" id="state-dot"></span><span id="state-text">Cargando…</span></div>
+      <div class="sub">Nota rápida <span id="state-keys"></span></div>
+    </div>
+  </aside>
+
+  <!-- Grabaciones -->
+  <main class="view on" id="view-recordings">
+    <section class="list" aria-label="Lista de grabaciones">
+      <div class="head">
+        <div class="eyebrow">Historial</div>
+        <h1>Grabaciones</h1>
+        <label class="search"><span data-icon="search"></span><span class="sr">Buscar</span>
+          <input id="q" type="search" placeholder="Buscar en las transcripciones" autocomplete="off"></label>
+        <div class="seg" role="group" aria-label="Filtrar">
+          <button data-kind="all" aria-pressed="true">Todas</button>
+          <button data-kind="call" aria-pressed="false">Llamadas</button>
+          <button data-kind="note" aria-pressed="false">Notas rápidas</button>
+        </div>
+      </div>
+      <div class="items" id="items" role="listbox" aria-label="Grabaciones"></div>
+    </section>
+    <section class="detail" id="detail" aria-live="off"></section>
+  </main>
+
+  <!-- Atajo y grabación -->
+  <main class="view" id="view-hotkey"><div class="settings"><div class="wrap">
+    <div class="eyebrow">Ajustes</div><h1>Atajo y grabación</h1>
+    <div class="card"><div class="ch">Atajo</div>
+      <div class="set"><div class="l"><b>Empezar / parar nota rápida</b><span>Funciona desde cualquier app. Si se está grabando una llamada, la detiene.</span><span class="err" id="hotkey-err" role="alert"></span></div>
+        <div class="keyfield" id="keyfield"></div></div>
+    </div>
+    <div class="card"><div class="ch">Al terminar una nota rápida</div>
+      <div class="set"><div class="l"><b>Copiar al portapapeles</b><span>Solo lo que dijiste, listo para pegar. Las llamadas se guardan sin copiar.</span></div><button class="switch" role="switch" data-setting="copy_on_stop" aria-label="Copiar al portapapeles"></button></div>
+      <div class="set"><div class="l"><b>Mostrar indicador de grabación</b><span>Píldora pequeña abajo en el centro de la pantalla.</span></div><button class="switch" role="switch" data-setting="show_indicator" aria-label="Mostrar indicador"></button></div>
+    </div>
+  </div></div></main>
+
+  <!-- Llamadas -->
+  <main class="view" id="view-calls"><div class="settings"><div class="wrap">
+    <div class="eyebrow">Ajustes</div><h1>Llamadas</h1>
+    <div class="card"><div class="ch">Detección automática</div>
+      <div class="set"><div class="l"><b>Grabar llamadas automáticamente</b><span>Empieza cuando una llamada usa el micrófono y para al colgar.</span></div><button class="switch" role="switch" data-setting="auto_mode" aria-label="Grabar llamadas automáticamente"></button></div>
+      <div class="set"><div class="l"><b>Microsoft Teams</b><span>App de escritorio.</span></div><button class="switch" role="switch" data-setting="detect_teams" aria-label="Detectar Teams"></button></div>
+      <div class="set"><div class="l"><b>Google Meet</b><span>En Firefox.</span></div><button class="switch" role="switch" data-setting="detect_meet" aria-label="Detectar Google Meet"></button></div>
+    </div>
+    <div class="card"><div class="ch">Etiquetas</div>
+      <div class="set"><div class="l"><b>Tu voz</b><span>Micrófono.</span><span class="err" data-err="label_me"></span></div><input class="text" data-text="label_me" aria-label="Etiqueta de tu voz"></div>
+      <div class="set"><div class="l"><b>Los demás</b><span>Audio de la llamada.</span><span class="err" data-err="label_others"></span></div><input class="text" data-text="label_others" aria-label="Etiqueta de los demás"></div>
+    </div>
+  </div></div></main>
+
+  <!-- Modelo -->
+  <main class="view" id="view-model"><div class="settings"><div class="wrap">
+    <div class="eyebrow">Ajustes</div><h1>Modelo e idioma</h1>
+    <div class="card"><div class="ch">Transcripción local</div>
+      <div class="set"><div class="l"><b>Modelo</b><span>Más grande = más preciso y más lento.</span><span class="err" data-err="model"></span></div>
+        <select class="select" data-select="model" aria-label="Modelo">
+          <option value="large-v3-turbo">large-v3-turbo (recomendado)</option>
+          <option value="large-v3">large-v3</option>
+          <option value="medium">medium</option>
+          <option value="small">small</option>
+        </select></div>
+      <div class="set"><div class="l"><b>Idioma de las llamadas</b><span class="err" data-err="language"></span></div>
+        <select class="select" data-select="language" aria-label="Idioma">
+          <option value="es">Español</option>
+          <option value="en">Inglés</option>
+        </select></div>
+      <div class="set"><div class="l"><b>Procesador</b><span id="device">—</span></div></div>
+    </div>
+  </div></div></main>
+
+  <!-- General -->
+  <main class="view" id="view-general"><div class="settings"><div class="wrap">
+    <div class="eyebrow">Ajustes</div><h1>General</h1>
+    <div class="card"><div class="ch">Inicio</div>
+      <div class="set"><div class="l"><b>Iniciar con Windows</b><span>Arranca minimizado junto al reloj.</span><span class="err" data-err="autostart"></span></div><button class="switch" role="switch" data-setting="autostart" aria-label="Iniciar con Windows"></button></div>
+    </div>
+    <div class="card"><div class="ch">Grabaciones</div>
+      <div class="set"><div class="l"><b>Carpeta</b><span class="path" id="folder"></span><span class="err" data-err="output_dir"></span></div>
+        <button class="btn" id="open-folder">Abrir</button><button class="btn" id="choose-folder">Cambiar…</button></div>
+    </div>
+    <div class="card"><div class="ch">Acerca de</div>
+      <div class="set"><div class="l"><b>Transcriptor de llamadas</b><span id="version"></span></div></div>
+    </div>
+  </div></div></main>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="icons.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
