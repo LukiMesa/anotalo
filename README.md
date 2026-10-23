@@ -1,17 +1,18 @@
 # Transcriptor de llamadas
 
-Transcribe en local y en tiempo real tus llamadas de **Microsoft Teams** y **Google Meet** (Firefox).
-Tu voz sale como **Yo** y la de los demás como **Otros**, en un Markdown por llamada listo para leer
-o pasárselo a Claude y sacar la lista de cambios que pide el cliente.
+Transcribe en local y en tiempo real tus llamadas de **Microsoft Teams** y **Google Meet** (Firefox), y tus **notas rápidas** dictadas con un atajo.
+En las llamadas, tu voz sale como **Yo** y la de los demás como **Otros**. Todo se guarda en Markdown, listo para leer o pasárselo a Claude.
 
 - 100 % local: Whisper `large-v3-turbo` (faster-whisper) en tu GPU NVIDIA. Nada sale del PC.
-- "Otros" captura **solo el audio de Teams o Firefox** (no notificaciones ni otras apps).
-- Arranque automático al detectar una llamada, o manual con `Ctrl+Alt+R`.
-- Puedes cambiar de pestaña o de app durante la llamada: la grabación solo termina cuando cuelgas.
+- Arranca con Windows y vive junto al reloj.
+- Ventana con todas las grabaciones: buscar, copiar, descargar `.md` y borrar (con "Deshacer").
+- Notas rápidas con `Ctrl+Alt+R`: al parar, el texto se copia al portapapeles.
+- Indicador pequeño abajo en el centro mientras se graba.
+- Diseño con un sistema propio (tema Noche, Sora / Instrument Sans / JetBrains Mono).
 
 ## Instalación
 
-Requisitos: Windows 11, Python 3.13, GPU NVIDIA con driver reciente (sin GPU funciona en CPU con un modelo más pequeño).
+Requisitos: Windows 11, Python 3.13, GPU NVIDIA con driver reciente (sin GPU funciona en CPU con un modelo más pequeño). WebView2 viene con Windows 11.
 
 ```powershell
 .\setup.ps1
@@ -25,48 +26,32 @@ La primera vez descarga el modelo (~1,6 GB) desde Hugging Face; después funcion
 .\.venv\Scripts\pythonw.exe run.pyw
 ```
 
-Aparece un icono de micrófono junto al reloj:
+La primera vez se activa el **arranque con Windows** (minimizado junto al reloj). Puedes desactivarlo en *Ajustes › General*.
 
-| Color | Estado |
-|------|--------|
-| Gris | Inactivo (modo automático apagado) |
-| Azul | Esperando llamada |
-| Rojo | Grabando |
+- **Abrir la ventana**: clic en el icono junto al reloj, o vuelve a abrir la app.
+- **Nota rápida**: `Ctrl+Alt+R` para empezar y otra vez para parar. Graba solo tu micrófono y copia al portapapeles lo que dijiste (sin horas ni etiquetas).
+- **Llamadas**: se graban solas cuando Teams usa el micrófono, o cuando Firefox lo usa con Google Meet abierto; paran al colgar. Puedes cambiar de pestaña o de app sin cortar la grabación. Las llamadas se guardan, no se copian. El atajo durante una llamada la detiene.
+- **Indicador**: píldora con barras al ritmo de tu voz → "Transcribiendo…" → "Copiado al portapapeles".
 
-- **Ctrl+Alt+R**: inicia / detiene la grabación.
-- **Modo automático**: empieza cuando Teams usa el micrófono, o cuando Firefox lo usa con una ventana de Meet; para cuando la app suelta el micrófono.
-- **Ver transcripción en vivo**: ventana con el texto según se habla y botón *Copiar todo*.
-- Las transcripciones se guardan en `Documentos\Llamadas\AAAA-MM-DD_HHMM_<App>.md`, línea a línea (si algo falla, lo ya dicho queda guardado).
+### Ventana
 
-Para arrancar con Windows:
+- **Grabaciones**: agrupadas por día, filtro Todas / Llamadas / Notas rápidas y buscador (sin importar tildes).
+  - *Copiar*: texto con horas y hablante (`[00:00:05] Yo: …`).
+  - *Descargar .md*: el archivo tal cual.
+  - *Borrar*: se puede deshacer durante unos segundos.
+- **Atajo y grabación**: cambia el atajo (pulsa el lápiz y la nueva combinación; Esc cancela), copiar al terminar, mostrar indicador.
+- **Llamadas**: detección automática, Teams / Meet por separado, etiquetas Yo / Otros.
+- **Modelo e idioma**: modelo Whisper e idioma (se recarga en segundo plano).
+- **General**: iniciar con Windows y carpeta de grabaciones.
 
-```powershell
-.\scripts\install_autostart.ps1
-```
-
-## Ajustes
-
-`%APPDATA%\CallTranscriber\config.json` (se crea al primer arranque; reinicia la app tras editarlo):
-
-| Clave | Por defecto | Qué hace |
-|------|------|------|
-| `model` | `large-v3-turbo` | Modelo Whisper |
-| `language` | `es` | Idioma de las llamadas |
-| `device` / `compute_type` | `cuda` / `float16` | GPU; usa `cpu` / `int8` sin GPU |
-| `label_me` / `label_others` | `Yo` / `Otros` | Etiquetas |
-| `hotkey` | `<ctrl>+<alt>+r` | Atajo global |
-| `auto_mode` | `true` | Detección automática de llamadas |
-| `output_dir` | `Documentos\Llamadas` | Carpeta de salida |
-| `mic_device` | `null` | Parte del nombre del micro (si no, el predeterminado de Windows) |
-| `silence_ms` | `600` | Pausa que cierra una frase |
-
-Registro de la app: `%APPDATA%\CallTranscriber\app.log`.
+Las grabaciones se guardan en `Documentos\Llamadas\AAAA-MM-DD_HHMM_<App>.md` (`<App>` = Teams, Meet o Nota). Ajustes en `%APPDATA%\CallTranscriber\config.json`; registro en `%APPDATA%\CallTranscriber\app.log`.
 
 ## Notas
 
-- Se transcribe todo lo que entra por tu micrófono, aunque estés silenciado en la llamada.
-- Pensado para usar con auriculares (con altavoces, el micro también capta al cliente).
+- En las llamadas se transcribe todo lo que entra por tu micrófono, aunque estés silenciado.
+- Pensado para usar con auriculares.
 - Prueba de captura: `.\.venv\Scripts\python scripts\probe_audio.py --process firefox.exe`
+- Demo del indicador: `.\.venv\Scripts\python scripts\demo_indicator.py`
 
 ## Desarrollo
 
@@ -74,4 +59,4 @@ Registro de la app: `%APPDATA%\CallTranscriber\app.log`.
 .\.venv\Scripts\pytest -q
 ```
 
-Licencia MIT.
+Licencia MIT. Fuentes Sora, Instrument Sans y JetBrains Mono bajo SIL Open Font License (ver `calltx/ui/web/fonts/`).
