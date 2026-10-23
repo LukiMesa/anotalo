@@ -87,7 +87,42 @@ def _gpu_name() -> str:
         return ""
 
 
+def selftest() -> int:
+    """Comprobación rápida del paquete (la usa el script de compilación). Sin ventana ni audio."""
+    from .paths import assets_dir, web_dir
+
+    problems = []
+    for f in [web_dir() / "index.html", web_dir() / "app.js", web_dir() / "fonts" / "Sora.ttf",
+              web_dir() / "fonts" / "JetBrainsMono.ttf", assets_dir() / "icon.ico"]:
+        if not f.is_file():
+            problems.append(f"falta {f}")
+    try:
+        import numpy as np
+
+        from .vad import SileroVad
+
+        SileroVad().prob(np.zeros(512, np.float32))
+    except Exception as e:  # noqa: BLE001
+        problems.append(f"VAD: {e}")
+    for mod in ("ctranslate2", "faster_whisper", "webview", "pystray", "comtypes", "pyaudiowpatch", "soxr"):
+        try:
+            __import__(mod)
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"{mod}: {e}")
+    lines = ["SELFTEST FALLO:"] + [f" - {p}" for p in problems] if problems else ["SELFTEST OK"]
+    text = "\n".join(lines)
+    if sys.stdout is not None:
+        print(text)
+    # el ejecutable no tiene consola: el resultado también va a un archivo (lo lee scripts/build.ps1)
+    import tempfile
+
+    Path(tempfile.gettempdir(), "transcriptor-selftest.txt").write_text(text, encoding="utf-8")
+    return 1 if problems else 0
+
+
 def main() -> int:
+    if "--selftest" in sys.argv:
+        return selftest()
     if not _single_instance():
         _signal_first_instance()
         return 0

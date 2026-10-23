@@ -10,23 +10,37 @@ En las llamadas, tu voz sale como **Yo** y la de los demás como **Otros**. Todo
 - Indicador pequeño abajo en el centro mientras se graba.
 - Diseño con un sistema propio (tema Noche, Sora / Instrument Sans / JetBrains Mono).
 
-## Instalación
+## Instalación (otros PCs)
 
-Requisitos: Windows 11, Python 3.13, GPU NVIDIA con driver reciente (sin GPU funciona en CPU con un modelo más pequeño). WebView2 viene con Windows 11.
+1. Descarga `Transcriptor-Setup-x.y.z.exe` desde **Releases** del repositorio (privado: entra con tu cuenta de GitHub).
+2. Ejecútalo. Se instala en tu usuario, sin permisos de administrador, con acceso en el menú Inicio y la opción de iniciar con Windows.
+3. Si Windows muestra **"Windows protegió tu PC"**: *Más información* → *Ejecutar de todas formas* (el instalador no está firmado).
+4. La primera vez la app se prepara (la barra superior muestra *Preparando… NN %*); hasta que termine no graba:
+   - **PC con NVIDIA**: descarga los componentes de GPU (~1,3 GB) y el modelo `large-v3-turbo`.
+   - **PC sin NVIDIA**: usa el procesador con el modelo `small` (más ligero, en tiempo real).
+
+Requisitos: Windows 10/11 de 64 bits y Microsoft Edge WebView2 (viene con Windows 11; el instalador avisa si falta). Para actualizar, instala la versión nueva encima: se conservan ajustes y grabaciones. Desinstalar no borra tus grabaciones.
+
+## Crear una versión nueva
+
+```powershell
+.\scriptsuild.ps1     # tests + ejecutable (PyInstaller) + instalador (Inno Setup) → dist.\scriptselease.ps1   # publica dist\Transcriptor-Setup-<versión>.exe como Release en GitHub
+```
+
+La versión sale de `calltx/__init__.py`. Requiere Inno Setup 6 (`winget install JRSoftware.InnoSetup`) y `gh` con sesión iniciada.
+
+## Desarrollo (desde el código)
 
 ```powershell
 .\setup.ps1
-```
-
-La primera vez descarga el modelo (~1,6 GB) desde Hugging Face; después funciona sin conexión.
-
-## Uso
-
-```powershell
 .\.venv\Scripts\pythonw.exe run.pyw
 ```
 
-La primera vez se activa el **arranque con Windows** (minimizado junto al reloj). Puedes desactivarlo en *Ajustes › General*.
+La versión de desarrollo usa sus propios ajustes (`%APPDATA%\CallTranscriber-dev`), guarda en `Documentos\Llamadas (dev)` y no toca el arranque con Windows, así que puede convivir con la instalada.
+
+## Uso
+
+La ventana tiene su propia barra superior: arrástrala para mover, doble clic para maximizar, bordes para redimensionar; la **×** la oculta y la app sigue junto al reloj.
 
 - **Abrir la ventana**: clic en el icono junto al reloj, o vuelve a abrir la app.
 - **Nota rápida**: `Ctrl+Alt+R` para empezar y otra vez para parar. Graba solo tu micrófono y copia al portapapeles lo que dijiste (sin horas ni etiquetas).
