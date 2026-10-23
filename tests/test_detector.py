@@ -144,3 +144,22 @@ def test_meet_title_matching():
     assert is_meet_title("Google Meet — Mozilla Firefox")
     assert not is_meet_title("Meeting notes – Google Docs — Mozilla Firefox")
     assert not is_meet_title("Meetup: Python Madrid — Mozilla Firefox")
+
+
+def test_detector_disabled_app():
+    w = World()
+    d = CallDetector(
+        on_start=lambda a: w.events.append(("start", a)),
+        on_stop=lambda a: w.events.append(("stop", a)),
+        probe_mic=lambda: set(w.mic),
+        probe_meet=lambda: w.meet,
+        clock=lambda: w.t,
+        enabled=lambda app: app is not CallApp.TEAMS,
+    )
+    w.mic = {TEAMS}
+    w.advance(d, 20)
+    assert w.events == []
+    w.mic = {FIREFOX}
+    w.meet = True
+    w.advance(d, 8)
+    assert w.events == [("start", CallApp.MEET)]

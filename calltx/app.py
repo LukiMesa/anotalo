@@ -13,6 +13,7 @@ from .detector import CallApp
 log = logging.getLogger(__name__)
 
 State = Literal["idle", "armed", "recording"]
+NOTE_LABEL = "Nota"
 EXE_FOR_APP = {CallApp.TEAMS: "ms-teams.exe", CallApp.MEET: "firefox.exe"}
 
 
@@ -21,10 +22,12 @@ class App:
         self,
         settings: Settings,
         detector_factory: Callable,
-        session_factory: Callable,  # (label, exe|None, on_line) -> session
+        session_factory: Callable,  # (label, exe|None, on_line, on_level) -> session
         notifier: Callable[..., None],
         wait_ready: Callable[[float], bool] | None = None,
+        copy_text: Callable[[str], None] = lambda text: None,
     ):
+        self._copy_text = copy_text
         self.settings = settings
         self._detector = detector_factory(self.on_call_start, self.on_call_stop)
         self._session_factory = session_factory
@@ -35,6 +38,9 @@ class App:
         self.on_state_change: list[Callable[[State], None]] = []
         self.on_line: list[Callable[[str, str, float, str], None]] = []
         self.on_session_start: list[Callable[[str], None]] = []
+        self.on_session_end: list[Callable[[Path | None, str, bool], None]] = []
+        self.on_level: list[Callable[[float], None]] = []
+        self._label: str | None = None
         self.last_path: Path | None = None
         self._wait_ready = wait_ready or (lambda timeout: True)
         self._stopping = False
@@ -107,7 +113,7 @@ class App:
         with self._lock:
             if self._session is not None or self._stopping:
                 return
-            self._begin("Manual", None, auto=False)
+            self._begin(NOTE_LABEL, None, auto=False)
 
     def set_auto(self, enabled: bool) -> None:
         with self._lock:
@@ -131,30 +137,61 @@ class App:
     # --- interno -----------------------------------------------------------
     def _begin(self, label: str, exe: str | None, auto: bool) -> None:
         try:
-            session = self._session_factory(label, exe, self._emit_line)
+            session = self._session_factory(label, exe, self._emit_line, self._emit_level)
             session.start()
         except Exception as e:  # noqa: BLE001
             log.exception("No se pudo iniciar la grabación")
             self._notify("Error al grabar", str(e))
             return
-        self._session, self._session_auto = session, auto
+        self._session, self._session_auto, self._label = session, auto, label
         self._sync_detector()
         for cb in list(self.on_session_start):
             cb(label)
-        self._notify("Grabando llamada", f"{label} — transcripción en curso")
+        if label != NOTE_LABEL:
+            self._notify("Grabando llamada", f"{label} — transcripción en curso")
         self._changed()
 
     def _stop_session(self, user: bool) -> None:
-        session, was_auto = self._session, self._session_auto
-        self._session, self._session_auto = None, False
+        session, was_auto, label = self._session, self._session_auto, self._label
+        self._session, self._session_auto, self._label = None, False, None
+        path, copied = None, False
         try:
             path = session.stop()
             self.last_path = path
-            self._notify("Transcripción guardada", str(path), path)
+            if label == NOTE_LABEL:
+                copied = self._copy_note(session)
+            else:
+                self._notify("Transcripción guardada", str(path), path)
         except Exception as e:  # noqa: BLE001
             log.exception("Error cerrando la grabación")
             self._notify("Error al guardar", str(e))
+        for cb in list(self.on_session_end):
+            try:
+                cb(path, label or "", copied)
+            except Exception:  # noqa: BLE001
+                log.exception("Error en listener de fin de grabación")
         if was_auto and user:
             self._detector.dismiss()
         self._sync_detector()
         self._changed()
+
+    def _copy_note(self, session) -> bool:
+        """Las notas rápidas se copian al portapapeles (solo el texto dicho). Las llamadas nunca."""
+        if not self.settings.copy_on_stop:
+            return False
+        text = session.plain_text().strip()
+        if not text:
+            return False
+        try:
+            self._copy_text(text)
+            return True
+        except Exception:  # noqa: BLE001
+            log.exception("No se pudo copiar la nota al portapapeles")
+            return False
+
+    def _emit_level(self, rms: float) -> None:
+        for cb in list(self.on_level):
+            try:
+                cb(rms)
+            except Exception:  # noqa: BLE001
+                log.exception("Error en listener de nivel")

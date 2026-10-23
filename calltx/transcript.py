@@ -52,6 +52,7 @@ class TranscriptWriter:
         self._lock = threading.Lock()
         self._pending: list[_Pending] = []
         self._written: list[str] = []
+        self._written_texts: list[str] = []
         self._closed = False
         self.path = self._unique_path()
         self._file = open(self.path, "w", encoding="utf-8", newline="\n")
@@ -122,6 +123,7 @@ class TranscriptWriter:
     def _emit(self, items: list[_Pending]) -> None:
         rendered = [p.render() for p in items]
         self._written += rendered
+        self._written_texts += [p.text for p in items]
         self._write("".join(r + "\n\n" for r in rendered))
 
     def close(self, ended_at: datetime) -> Path:
@@ -144,3 +146,9 @@ class TranscriptWriter:
         with self._lock:
             pend = sorted(self._pending, key=lambda p: p.start_s)
             return "\n\n".join(self._written + [p.render() for p in pend])
+
+    def plain_texts(self) -> list[str]:
+        """Solo el texto dicho (frases ya unidas), en orden."""
+        with self._lock:
+            pend = sorted(self._pending, key=lambda p: p.start_s)
+            return self._written_texts + [p.text for p in pend]

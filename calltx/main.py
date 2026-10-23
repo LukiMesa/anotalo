@@ -90,22 +90,28 @@ def main() -> int:
             return "firefox.exe"
         return None
 
-    def session_factory(label: str, exe: str | None, on_line):
-        exe = exe or manual_target()
+    def session_factory(label: str, exe: str | None, on_line, on_level=None):
+        mic = MicSource(settings.mic_device)
+        if exe is None:
+            # Nota rápida: solo el micrófono.
+            log.info("Nota rápida: solo micrófono")
+            return CallSession(settings, transcriber, label, mic, None, on_line=on_line, on_level=on_level)
 
         def make_others():
-            return open_call_audio(find_root_pid(exe)) if exe else DefaultLoopbackSource()
+            return open_call_audio(find_root_pid(exe))
 
         others = make_others()
         log.info("Sesión %s: audio de la llamada desde %s", label, others.name)
         return CallSession(
-            settings, transcriber, label, MicSource(settings.mic_device), others,
-            on_line=on_line, others_factory=make_others if exe else None,
+            settings, transcriber, label, mic, others,
+            on_line=on_line, others_factory=make_others, on_level=on_level,
         )
+
+    from .clipboard import set_text as copy_text
 
     app = App(
         settings, lambda on_start, on_stop: CallDetector(on_start, on_stop), session_factory, _notifier,
-        wait_ready=lambda timeout: ready.wait(timeout),
+        wait_ready=lambda timeout: ready.wait(timeout), copy_text=copy_text,
     )
 
     root = tk.Tk()

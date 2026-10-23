@@ -113,3 +113,34 @@ def test_dead_others_source_is_recreated(tmp_path):
     _t.sleep(1.2)
     sess.stop()
     assert made, "others_factory no se usó para recrear la fuente"
+
+
+def test_mic_only_session(tmp_path):
+    s = Settings(output_dir=str(tmp_path))
+    sess = CallSession(s, FakeTranscriber(), "Nota", FakeSource("mic", 0.5), None,
+                       vad_factory=fake_vad_factory, clock=lambda: T0, retry_delay_s=0.0)
+    sess.start()
+    text = sess.stop().read_text(encoding="utf-8")
+    assert "Yo:**" in text and "Otros" not in text
+
+
+def test_plain_text_session(tmp_path):
+    s = Settings(output_dir=str(tmp_path))
+    sess = CallSession(s, FakeTranscriber(), "Nota", FakeSource("mic", 0.5), None,
+                       vad_factory=fake_vad_factory, clock=lambda: T0, retry_delay_s=0.0)
+    sess.start()
+    sess.stop()
+    assert sess.plain_text() == "texto de Yo"
+
+
+def test_level_callback_throttled(tmp_path):
+    levels = []
+    s = Settings(output_dir=str(tmp_path))
+    sess = CallSession(s, FakeTranscriber(), "Nota", FakeSource("mic", 0.5), None,
+                       vad_factory=fake_vad_factory, clock=lambda: T0, retry_delay_s=0.0,
+                       on_level=levels.append)
+    sess.start()
+    sess.stop()
+    # 2,5 s de audio en trozos de 50 ms → como mucho ~50 avisos, y se nota la voz
+    assert 10 < len(levels) <= 52
+    assert max(levels) > 0.1 and min(levels) == 0.0

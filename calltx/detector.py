@@ -123,7 +123,9 @@ class CallDetector:
         clock: Callable[[], float] = time.monotonic,
         start_hold_s: float = 4.0,
         stop_grace_s: float = 10.0,
+        enabled: Callable[[CallApp], bool] = lambda app: True,
     ):
+        self._enabled = enabled
         self._on_start = on_start
         self._on_stop = on_stop
         self._probe_mic = probe_mic
@@ -169,9 +171,9 @@ class CallDetector:
         if self._suspended:
             return
         cand: CallApp | None = None
-        if self._app_in_use(CallApp.TEAMS, keys):
+        if self._enabled(CallApp.TEAMS) and self._app_in_use(CallApp.TEAMS, keys):
             cand = CallApp.TEAMS
-        elif self._app_in_use(CallApp.MEET, keys) and self._probe_meet():
+        elif self._enabled(CallApp.MEET) and self._app_in_use(CallApp.MEET, keys) and self._probe_meet():
             cand = CallApp.MEET
         if cand is None:
             self._candidate = None

@@ -22,13 +22,17 @@ log = logging.getLogger(__name__)
 
 OnLine = Callable[[str, str, float, str], None]  # speaker, "HH:MM:SS", start_s, text
 MAX_RETRIES = 3
+LEVEL_INTERVAL_S = 0.05
 
 
 class _Lane:
     """Una fuente con su cola y su hilo de proceso (el callback de audio nunca bloquea)."""
 
-    def __init__(self, source: AudioSource, segmenter: Segmenter, t0: float):
+    def __init__(self, source: AudioSource, segmenter: Segmenter, t0: float,
+                 on_level: Callable[[float], None] | None = None):
         self.source = source
+        self._on_level = on_level
+        self._last_level_t = -1.0
         self.segmenter = segmenter
         self.t0 = t0
         self.q: queue.Queue[tuple[float, np.ndarray | None] | None] = queue.Queue()
@@ -37,6 +41,12 @@ class _Lane:
 
     def on_audio(self, t: float, x: np.ndarray) -> None:
         self.q.put((t, x))
+        if self._on_level is not None and t - self._last_level_t >= LEVEL_INTERVAL_S:
+            self._last_level_t = t
+            try:
+                self._on_level(float(np.sqrt(np.mean(np.square(x)))) if len(x) else 0.0)
+            except Exception:  # noqa: BLE001
+                log.exception("Error notificando nivel")
 
     def _run(self) -> None:
         while True:
@@ -61,17 +71,22 @@ class CallSession:
         transcriber,
         app_label: str,
         mic: AudioSource,
-        others: AudioSource,
+        others: AudioSource | None,
         on_line: OnLine | None = None,
         vad_factory: Callable[[], Callable[[np.ndarray], float]] = SileroVad,
         clock: Callable[[], float] = time.monotonic,
         retry_delay_s: float = 1.0,
         others_factory: Callable[[], AudioSource] | None = None,
+        on_level: Callable[[float], None] | None = None,
     ):
         self._s = settings
         self._asr = transcriber
         self.app_label = app_label
-        self._sources = [(mic, settings.label_me), (others, settings.label_others)]
+        # others=None → nota rápida: solo el micrófono
+        self._sources = [(mic, settings.label_me)]
+        if others is not None:
+            self._sources.append((others, settings.label_others))
+        self._on_level = on_level
         self._on_line = on_line
         self._vad_factory = vad_factory
         self._clock = clock
@@ -100,7 +115,7 @@ class CallSession:
                 max_segment_s=self._s.max_segment_s,
                 min_segment_ms=self._s.min_segment_ms,
             )
-            lane = _Lane(source, seg, t0)
+            lane = _Lane(source, seg, t0, on_level=self._on_level if source is self._sources[0][0] else None)
             lane.thread.start()
             self._lanes.append(lane)
             self._open(lane)
@@ -171,6 +186,9 @@ class CallSession:
         self._asr.wait_idle(timeout=60)
         assert self.writer is not None
         return self.writer.close(datetime.now())
+
+    def plain_text(self) -> str:
+        return "\n\n".join(self.writer.plain_texts()) if self.writer else ""
 
     def text(self) -> str:
         return self.writer.text() if self.writer else ""

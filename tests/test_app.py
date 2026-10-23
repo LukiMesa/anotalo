@@ -29,9 +29,13 @@ class FakeDetector:
 
 
 class FakeSession:
-    def __init__(self, label, exe):
+    def __init__(self, label, exe, text="texto de Yo"):
         self.label, self.exe = label, exe
         self.started = self.stopped = False
+        self._text = text
+
+    def plain_text(self):
+        return self._text
 
     def start(self):
         self.started = True
@@ -45,12 +49,14 @@ class FakeSession:
 
 
 class Harness:
-    def __init__(self, auto=True):
+    def __init__(self, auto=True, text="texto de Yo", copy_on_stop=True):
         self.sessions = []
         self.notes = []
+        self.copied = []
+        self.ended = []
 
-        def sf(label, exe, on_line):
-            s = FakeSession(label, exe)
+        def sf(label, exe, on_line, on_level):
+            s = FakeSession(label, exe, text)
             self.sessions.append(s)
             return s
 
@@ -58,7 +64,9 @@ class Harness:
             self.det = FakeDetector(on_start, on_stop)
             return self.det
 
-        self.app = App(Settings(auto_mode=auto), df, sf, lambda *a: self.notes.append(a))
+        self.app = App(Settings(auto_mode=auto, copy_on_stop=copy_on_stop), df, sf,
+                       lambda *a: self.notes.append(a), copy_text=self.copied.append)
+        self.app.on_session_end.append(lambda *a: self.ended.append(a))
         self.app.start()
 
 
@@ -67,7 +75,7 @@ def test_toggle_starts_and_stops():
     h.app.toggle()
     assert h.app.state == "recording"
     s = h.sessions[0]
-    assert s.started and s.label == "Manual"
+    assert s.started and s.label == "Nota"
     h.app.toggle()
     assert s.stopped
     assert h.app.state == "armed"
@@ -153,3 +161,45 @@ def test_no_session_after_quit():
     h.det.on_start(CallApp.TEAMS)
     h.app.toggle()
     assert h.sessions == []
+
+
+def test_note_copied_on_stop():
+    h = Harness()
+    h.app.toggle()
+    h.app.toggle()
+    assert h.copied == ["texto de Yo"]
+
+
+def test_call_not_copied():
+    h = Harness()
+    h.det.on_start(CallApp.TEAMS)
+    h.app.toggle()
+    assert h.copied == []
+
+
+def test_empty_note_not_copied():
+    h = Harness(text="")
+    h.app.toggle()
+    h.app.toggle()
+    assert h.copied == []
+    assert h.sessions[0].stopped
+
+
+def test_copy_disabled_setting():
+    h = Harness(copy_on_stop=False)
+    h.app.toggle()
+    h.app.toggle()
+    assert h.copied == []
+
+
+def test_session_end_event():
+    h = Harness()
+    h.app.toggle()
+    h.app.toggle()
+    assert h.ended == [(Path("Nota.md"), "Nota", True)]
+
+
+def test_manual_label_is_nota():
+    h = Harness()
+    h.app.toggle()
+    assert (h.sessions[0].label, h.sessions[0].exe) == ("Nota", None)
