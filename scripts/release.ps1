@@ -1,4 +1,4 @@
-# Publica el instalador como Release en GitHub (repositorio privado).
+﻿# Publica el instalador como Release en GitHub (repositorio privado).
 # Uso: .\scripts\release.ps1   (antes: .\scripts\build.ps1)
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
@@ -17,4 +17,7 @@ Instalador de Transcriptor $version para Windows 10/11 (64 bits).
 2. Si Windows muestra "Windows protegió tu PC": *Más información* → *Ejecutar de todas formas* (el instalador no está firmado).
 3. La primera vez descarga el modelo (y en PCs con NVIDIA, los componentes de GPU). La barra superior muestra el progreso.
 "@
-gh release create $tag $setup --title "Transcriptor $version" --notes $notes
+# Las notas van en un archivo: PowerShell 5.1 rompe los argumentos con comillas y acentos
+$notesFile = Join-Path $env:TEMP "transcriptor-release-notes.md"
+[IO.File]::WriteAllText($notesFile, $notes, (New-Object Text.UTF8Encoding $false))
+gh release create $tag $setup --title "Transcriptor $version" --notes-file $notesFile
