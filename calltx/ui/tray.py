@@ -15,13 +15,27 @@ STATE_TEXT = {"idle": "Inactivo", "armed": "Esperando llamada", "recording": "Gr
 NAVY = (22, 28, 43, 255)
 
 
+_BASE: Image.Image | None = None
+
+
+def _base() -> Image.Image:
+    global _BASE
+    if _BASE is None:
+        from ..paths import assets_dir
+
+        try:
+            _BASE = Image.open(assets_dir() / "icon.png").convert("RGBA").resize((64, 64), Image.LANCZOS)
+        except OSError:
+            _BASE = Image.new("RGBA", (64, 64), NAVY)
+    return _BASE
+
+
 def _icon(color: tuple[int, int, int]) -> Image.Image:
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    """Icono de la app con un punto de estado abajo a la derecha."""
+    img = _base().copy()
     d = ImageDraw.Draw(img)
-    d.ellipse((4, 4, 60, 60), fill=color + (255,))
-    d.rounded_rectangle((24, 13, 40, 37), radius=8, fill=NAVY)
-    d.arc((17, 22, 47, 46), 0, 180, fill=NAVY, width=4)
-    d.line((32, 46, 32, 52), fill=NAVY, width=4)
+    d.ellipse((40, 40, 63, 63), fill=NAVY)
+    d.ellipse((44, 44, 59, 59), fill=color + (255,))
     return img
 
 

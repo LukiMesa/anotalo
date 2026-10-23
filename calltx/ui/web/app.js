@@ -163,7 +163,12 @@ function renderState(st) {
     ? `Preparando… ${Math.round(S.state.progress * 100)} %` : (labels[S.state.state] || "");
   $("#state-keys").innerHTML = keysHtml(S.state.hotkey);
   if (S.state.device) $("#device").textContent = S.state.device;
-  if (S.state.version) $("#version").textContent = "Versión " + S.state.version;
+  if (S.state.version) $("#version").textContent = "Versión " + S.state.version + (S.state.frozen ? "" : " · desarrollo");
+  if (S.state.frozen === false) {
+    const sw = $('[data-setting="autostart"]');
+    sw.disabled = true;
+    setErr("autostart", "Solo en la versión instalada");
+  }
 }
 
 // --- ajustes ------------------------------------------------------------

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import __version__
+from ..paths import is_frozen
 from ..library import Recording, Trash, list_recordings, parse_recording, to_readable
 
 log = logging.getLogger(__name__)
@@ -184,6 +185,7 @@ class Api:
             "hotkey": self._app.settings.hotkey,
             "device": self._device_info(),
             "version": __version__,
+            "frozen": is_frozen(),
         }
 
     def get_settings(self) -> dict:

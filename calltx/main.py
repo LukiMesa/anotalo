@@ -118,10 +118,10 @@ def main() -> int:
         save_settings(settings, cfg_path)
 
     # Arranque con Windows (primera vez con esta versión) y limpieza de la papelera.
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    autostart_args = f'"{ROOT / "run.pyw"}" --minimized'
+    # Solo la versión instalada gestiona el arranque con Windows (desarrollo no lo toca).
+    target = autostart.target_for_current_run()
     try:
-        if autostart.ensure_autostart(settings, pythonw, autostart_args, ROOT):
+        if target and autostart.ensure_autostart(settings, *target):
             persist()
     except Exception:  # noqa: BLE001
         log.exception("No se pudo configurar el arranque con Windows")
@@ -264,8 +264,10 @@ def main() -> int:
             raise ValueError(str(e)) from None
 
     def apply_autostart(on):
+        if target is None:
+            raise ValueError("Solo en la versión instalada")
         if on:
-            autostart.enable(pythonw, autostart_args, ROOT)
+            autostart.enable(*target)
         else:
             autostart.disable()
 
@@ -312,5 +314,8 @@ def main() -> int:
         log.info("Transcriptor iniciado (atajo %s, modo automático %s)", settings.hotkey, settings.auto_mode)
 
     storage = cfg_path.parent / "webview"
-    webview.start(bootstrap, gui="edgechromium", private_mode=False, storage_path=str(storage))
+    from .paths import assets_dir
+
+    webview.start(bootstrap, gui="edgechromium", private_mode=False, storage_path=str(storage),
+                  icon=str(assets_dir() / "icon.ico"))
     return 0
