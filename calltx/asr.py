@@ -68,7 +68,12 @@ def _default_factory(model: str, device: str, compute_type: str) -> Any:
 
     if device == "cuda":
         _add_cuda_dll_dirs()
-    return WhisperModel(model, device=device, compute_type=compute_type)
+    try:
+        # Sin red si el modelo ya está descargado.
+        return WhisperModel(model, device=device, compute_type=compute_type, local_files_only=True)
+    except Exception:  # noqa: BLE001 - no está en caché: descarga (solo la primera vez)
+        log.info("Descargando modelo %s…", model)
+        return WhisperModel(model, device=device, compute_type=compute_type)
 
 
 class Transcriber:

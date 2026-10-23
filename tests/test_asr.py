@@ -97,3 +97,21 @@ def test_is_hallucination_rules():
     assert is_hallucination("...", -0.1, 0.0)
     assert is_hallucination("Subtítulos realizados por la comunidad de Amara.org", -0.1, 0.0)
     assert not is_hallucination("Quiero cambiar el logo", -0.3, 0.1)
+
+
+def test_default_factory_prefers_local_files(monkeypatch):
+    import faster_whisper
+
+    from calltx import asr
+
+    calls = []
+
+    class FakeWM:
+        def __init__(self, model, **kw):
+            calls.append(kw.get("local_files_only", False))
+            if kw.get("local_files_only"):
+                raise OSError("not cached")
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", FakeWM)
+    asr._default_factory(model="tiny", device="cpu", compute_type="int8")
+    assert calls == [True, False]
