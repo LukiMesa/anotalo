@@ -36,3 +36,10 @@ def test_corrupt_file_gives_defaults(tmp_path):
     p = tmp_path / "c.json"
     p.write_text("{not json", encoding="utf-8")
     assert load_settings(p) == Settings()
+
+
+def test_new_defaults():
+    s = Settings()
+    assert s.copy_on_stop is True and s.show_indicator is True
+    assert s.autostart is True and s.autostart_configured is False
+    assert s.detect_teams is True and s.detect_meet is True

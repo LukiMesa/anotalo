@@ -31,6 +31,12 @@ class Settings:
     max_segment_s: float = 25.0
     min_segment_ms: int = 300
     save_audio: bool = False
+    copy_on_stop: bool = True
+    show_indicator: bool = True
+    autostart: bool = True
+    autostart_configured: bool = False
+    detect_teams: bool = True
+    detect_meet: bool = True
 
 
 def default_config_path() -> Path:

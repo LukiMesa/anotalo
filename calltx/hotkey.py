@@ -38,28 +38,63 @@ def parse_hotkey(spec: str) -> tuple[int, int]:
     return mods, vk
 
 
+class HotkeyError(Exception):
+    pass
+
+
+def validate_hotkey(spec: str) -> tuple[int, int]:
+    """Como parse_hotkey, pero exige Ctrl, Alt o Win (Shift solo no basta)."""
+    mods, vk = parse_hotkey(spec)
+    if not mods & (MOD_CONTROL | MOD_ALT | MOD_WIN):
+        raise ValueError("El atajo necesita Ctrl, Alt o Win")
+    return mods, vk
+
+
+WM_APP_REBIND = 0x8000 + 1
+
+
 class GlobalHotkey:
     def __init__(self, spec: str, callback: Callable[[], None]):
         self._mods, self._vk = parse_hotkey(spec)
-        self._spec = spec
+        self.spec = spec
         self._cb = callback
         self._tid: int | None = None
         self._thread: threading.Thread | None = None
+        self._started = threading.Event()
         self.registered = threading.Event()
+        self._rebind_req: tuple[str, int, int] | None = None
+        self._rebind_done = threading.Event()
+        self._rebind_ok = False
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, name="hotkey", daemon=True)
         self._thread.start()
-        self.registered.wait(2)
+        self._started.wait(2)
+
+    def rebind(self, spec: str) -> None:
+        """Cambia el atajo en vivo. Si el nuevo no se puede registrar, se queda el anterior."""
+        mods, vk = validate_hotkey(spec)
+        if self._tid is None:
+            raise HotkeyError("El atajo no está activo")
+        self._rebind_req = (spec, mods, vk)
+        self._rebind_done.clear()
+        ctypes.windll.user32.PostThreadMessageW(self._tid, WM_APP_REBIND, 0, 0)
+        if not self._rebind_done.wait(2):
+            raise HotkeyError("No se pudo cambiar el atajo")
+        if not self._rebind_ok:
+            raise HotkeyError("Esa combinación ya la usa otra aplicación")
 
     def _run(self) -> None:
         user32 = ctypes.windll.user32
-        self._tid = ctypes.windll.kernel32.GetCurrentThreadId()
-        if not user32.RegisterHotKey(None, 1, self._mods, self._vk):
-            log.error("No se pudo registrar el atajo %s (¿lo usa otra app?)", self._spec)
-            return
-        self.registered.set()
         msg = wintypes.MSG()
+        # Crea la cola de mensajes del hilo antes de anunciar que está listo.
+        user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
+        self._tid = ctypes.windll.kernel32.GetCurrentThreadId()
+        if user32.RegisterHotKey(None, 1, self._mods, self._vk):
+            self.registered.set()
+        else:
+            log.error("No se pudo registrar el atajo %s (¿lo usa otra app?)", self.spec)
+        self._started.set()
         try:
             while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 if msg.message == WM_HOTKEY:
@@ -67,9 +102,24 @@ class GlobalHotkey:
                         self._cb()
                     except Exception:  # noqa: BLE001
                         log.exception("Error en la acción del atajo")
+                elif msg.message == WM_APP_REBIND and self._rebind_req:
+                    spec, mods, vk = self._rebind_req
+                    was = self.registered.is_set()
+                    user32.UnregisterHotKey(None, 1)
+                    if user32.RegisterHotKey(None, 1, mods, vk):
+                        self._mods, self._vk, self.spec = mods, vk, spec
+                        self.registered.set()
+                        self._rebind_ok = True
+                    else:
+                        if was:
+                            user32.RegisterHotKey(None, 1, self._mods, self._vk)
+                        self._rebind_ok = False
+                    self._rebind_done.set()
         finally:
             user32.UnregisterHotKey(None, 1)
 
     def stop(self) -> None:
         if self._tid is not None:
             ctypes.windll.user32.PostThreadMessageW(self._tid, WM_QUIT, 0, 0)
+        if self._thread is not None:
+            self._thread.join(2)
