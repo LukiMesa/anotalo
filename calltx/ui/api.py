@@ -46,7 +46,9 @@ class Api:
         today: Callable[[], date] = date.today,
         device_info: Callable[[], str] = lambda: "",
         hotkey_capture: Callable[[bool], None] = lambda on: None,
+        chrome=None,
     ):
+        self._chrome = chrome
         self._hotkey_capture = hotkey_capture
         self._capture_timeout_s = 20.0
         self._capture_timer: threading.Timer | None = None
@@ -240,6 +242,29 @@ class Api:
     def log_js(self, message: str) -> dict:
         log.warning("Ventana: %s", str(message)[:2000])
         return {"ok": True}
+
+    # --- barra propia de la ventana -------------------------------------------
+    def window_minimize(self) -> dict:
+        self._chrome.minimize()
+        return {"ok": True}
+
+    def window_toggle_maximize(self) -> dict:
+        return {"ok": True, "maximized": bool(self._chrome.toggle_maximize())}
+
+    def window_close(self) -> dict:
+        self._chrome.hide()
+        return {"ok": True}
+
+    def window_start_drag(self) -> dict:
+        self._chrome.start_drag()
+        return {"ok": True}
+
+    def window_start_resize(self, edge: str) -> dict:
+        try:
+            self._chrome.start_resize(edge)
+            return {"ok": True}
+        except ValueError as e:
+            return _err(str(e))
 
     def choose_folder(self) -> dict:
         p = self._folder_dialog()

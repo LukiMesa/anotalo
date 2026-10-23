@@ -137,12 +137,26 @@ window.onEvent = (evt) => {
     clearTimeout(listTimer); listTimer = setTimeout(loadList, 800);
   } else if (evt.type === "state") {
     renderState(evt);
+  } else if (evt.type === "window") {
+    setMaxIcon(evt.maximized);
   } else if (evt.type === "recordings") {
     loadList().then(() => { if (evt.select) select(evt.select); });
   }
 };
+let timerId = null;
+function renderTimer() {
+  const el = $("#state-timer");
+  if (S.state.state !== "recording" || !S.state.started) { el.textContent = ""; return; }
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - S.state.started));
+  el.textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
 function renderState(st) {
+  const was = S.state.state;
   S.state = { ...S.state, ...st };
+  if (S.state.state === "recording" && was !== "recording") S.state.started = Date.now() / 1000;
+  clearInterval(timerId);
+  if (S.state.state === "recording") timerId = setInterval(renderTimer, 1000);
+  renderTimer();
   const labels = { idle: "Inactivo", armed: "Esperando llamada", recording: "Grabando", preparing: "Preparando…" };
   $("#state-dot").className = "dot " + S.state.state;
   $("#state-text").textContent = S.state.state === "preparing" && S.state.progress != null
@@ -225,6 +239,23 @@ document.addEventListener("keydown", async (e) => {
   else $("#hotkey-err").textContent = res.error;
   renderKeyfield(false);
 }, true);
+
+// --- barra propia ---------------------------------------------------------
+$("#tb-min").onclick = () => api().window_minimize();
+async function toggleMax() {
+  setMaxIcon((await api().window_toggle_maximize()).maximized);
+}
+function setMaxIcon(maximized) {
+  const r = { maximized };
+  document.body.classList.toggle("maximized", !!r.maximized);
+  $("#tb-max").setAttribute("aria-label", r.maximized ? "Restaurar" : "Maximizar");
+  $("#tb-max").title = r.maximized ? "Restaurar" : "Maximizar";
+  $("#tb-max").innerHTML = r.maximized
+    ? '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="4" width="12" height="12" rx="1.5"/><path d="M16 16v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2"/></svg>'
+    : '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>';
+}
+$("#tb-max").onclick = toggleMax;
+$("#tb-close").onclick = () => api().window_close();
 
 // Si la ventana pierde el foco o se oculta mientras se captura un atajo, se cancela.
 window.addEventListener("blur", () => { if (listening) renderKeyfield(false); });

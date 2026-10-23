@@ -112,6 +112,7 @@ def main() -> int:
     from .ui.indicator import Indicator, wire_indicator
     from .ui.tray import Tray
     from .ui.window import MainWindow
+    from .ui.winchrome import Chrome
 
     def persist() -> None:
         save_settings(settings, cfg_path)
@@ -222,9 +223,12 @@ def main() -> int:
         folder_dialog=lambda: holder["win"].folder_dialog(),
         device_info=device_info,
         hotkey_capture=lambda on: hotkey.pause() if on else hotkey.resume(),
+        chrome=Chrome(lambda: holder["win"].get_hwnd(), hide=lambda: holder["win"].hide(),
+                      on_maximized=lambda m: holder["win"].on_maximized(m)),
     )
     win = MainWindow(api, start_hidden=start_hidden)
     holder["win"] = win
+    win.chrome = api._chrome
 
     def push_state(*_):
         win.push({"type": "state", "state": app.state, "hotkey": settings.hotkey, "device": device_info(),

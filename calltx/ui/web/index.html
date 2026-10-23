@@ -8,19 +8,23 @@
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
+<header class="titlebar" id="titlebar">
+  <div class="tb-brand"><span class="mark" data-icon="mic"></span>Transcriptor</div>
+  <div class="tb-mid"><div class="tb-status" aria-live="polite"><span class="dot" id="state-dot"></span><span id="state-text">Cargando…</span><span class="tb-timer" id="state-timer"></span><span class="tb-keys" id="state-keys"></span></div></div>
+  <div class="tb-ctl">
+    <button class="tb-btn" id="tb-min" aria-label="Minimizar" title="Minimizar"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
+    <button class="tb-btn" id="tb-max" aria-label="Maximizar" title="Maximizar"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
+    <button class="tb-btn close" id="tb-close" aria-label="Cerrar" title="Cerrar"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
+  </div>
+</header>
 <div class="app">
   <aside class="side" aria-label="Navegación">
-    <div class="brand"><span class="mark" data-icon="mic"></span>Transcriptor</div>
     <button class="nav" data-view="recordings" aria-current="page"><span data-icon="list"></span>Grabaciones<span class="count" id="count"></span></button>
     <div class="group">Ajustes</div>
     <button class="nav" data-view="hotkey"><span data-icon="keyboard"></span>Atajo y grabación</button>
     <button class="nav" data-view="calls"><span data-icon="phone"></span>Llamadas</button>
     <button class="nav" data-view="model"><span data-icon="chip"></span>Modelo e idioma</button>
     <button class="nav" data-view="general"><span data-icon="gear"></span>General</button>
-    <div class="status" aria-live="polite">
-      <div class="row"><span class="dot" id="state-dot"></span><span id="state-text">Cargando…</span></div>
-      <div class="sub">Nota rápida <span id="state-keys"></span></div>
-    </div>
   </aside>
 
   <!-- Grabaciones -->

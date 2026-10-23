@@ -189,3 +189,29 @@ def test_purge_trash_removes_old(env):
 def test_undo_token_validated(env):
     api, *_ = env
     assert api.undo(r"1__..\..\x.md")["ok"] is False
+
+
+def test_api_window_controls_delegate(env):
+    api, *_ = env
+    calls = []
+
+    class C:
+        maximized = False
+
+        def minimize(self): calls.append("min")
+        def toggle_maximize(self): calls.append("max"); return True
+        def hide(self): calls.append("hide")
+        def start_drag(self): calls.append("drag")
+        def start_resize(self, edge):
+            if edge != "left":
+                raise ValueError("borde")
+            calls.append("resize")
+
+    api._chrome = C()
+    api.window_minimize()
+    assert api.window_toggle_maximize() == {"ok": True, "maximized": True}
+    api.window_close()
+    api.window_start_drag()
+    assert api.window_start_resize("left") == {"ok": True}
+    assert api.window_start_resize("x")["ok"] is False
+    assert calls == ["min", "max", "hide", "drag", "resize"]
