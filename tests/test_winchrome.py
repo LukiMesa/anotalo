@@ -49,25 +49,6 @@ def test_minimize_and_hide():
     assert w.calls == ["min"] and hidden == [1]
 
 
-def test_work_area_relative_to_monitor():
-    from calltx.ui.window import maximized_bounds
-
-    # monitor secundario a la derecha, barra de tareas abajo de 48 px
-    assert maximized_bounds(screen=(2560, 0, 1920, 1080), work=(2560, 0, 1920, 1032)) == (0, 0, 1920, 1032)
-    # barra de tareas arriba en el principal
-    assert maximized_bounds(screen=(0, 0, 2560, 1440), work=(0, 48, 2560, 1392)) == (0, 48, 2560, 1392)
-
-
-def test_resize_bounds_edges_and_min_size():
-    from calltx.ui.window import resize_bounds
-
-    start = (100, 100, 1000, 700)
-    assert resize_bounds("bottomright", start, 50, 30, 940, 600) == (100, 100, 1050, 730)
-    assert resize_bounds("left", start, 40, 0, 940, 600) == (140, 100, 960, 700)
-    assert resize_bounds("left", start, 200, 0, 940, 600) == (160, 100, 940, 700)
-    assert resize_bounds("top", start, 0, -20, 940, 600) == (100, 80, 1000, 720)
-
-
 def test_main_window_exposes_hwnd_for_chrome():
     # main.py conecta Chrome con MainWindow.get_hwnd: si falta, los botones de la barra no hacen nada
     from calltx.ui.window import MainWindow

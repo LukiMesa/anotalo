@@ -154,8 +154,7 @@ def find_window(title: str, pid: int) -> int | None:
 
 
 def apply_chrome(hwnd: int) -> None:
-    """Esquinas redondeadas, modo oscuro, sombra y estilos para que Windows trate la ventana
-    como una normal (maximizar/minimizar desde la barra de tareas, Win+flechas)."""
+    """Esquinas redondeadas, modo oscuro y sombra (los estilos de ventana los pone nativeframe)."""
     try:
         dwm = ctypes.WinDLL("dwmapi")
         val = ctypes.c_int(DWMWCP_ROUND)
@@ -166,5 +165,3 @@ def apply_chrome(hwnd: int) -> None:
         dwm.DwmExtendFrameIntoClientArea(wintypes.HWND(hwnd), ctypes.byref(m))
     except OSError:
         log.debug("DWM no disponible", exc_info=True)
-    style = _u.GetWindowLongPtrW(hwnd, GWL_STYLE)
-    _u.SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_SYSMENU)

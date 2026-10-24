@@ -43,85 +43,15 @@ def enable_native_drag_regions() -> None:
 RESIZE_BORDER = 5
 
 
-def maximized_bounds(screen: tuple[int, int, int, int], work: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
-    """Límites al maximizar (x, y, ancho, alto) relativos al monitor: su área de trabajo."""
-    sx, sy, _, _ = screen
-    wx, wy, ww, wh = work
-    return wx - sx, wy - sy, ww, wh
-
-
-def resize_bounds(edge: str, start: tuple[int, int, int, int], dx: int, dy: int,
-                  min_w: int, min_h: int) -> tuple[int, int, int, int]:
-    """Nuevo (x, y, ancho, alto) al arrastrar `edge` desde `start` un desplazamiento (dx, dy)."""
-    x, y, w, h = start
-    if "left" in edge:
-        nw = max(min_w, w - dx)
-        x, w = x + (w - nw), nw
-    if "right" in edge:
-        w = max(min_w, w + dx)
-    if "top" in edge:
-        nh = max(min_h, h - dy)
-        y, h = y + (h - nh), nh
-    if "bottom" in edge:
-        h = max(min_h, h + dy)
-    return x, y, w, h
-
-
-def install_resize_border(form, border: int = RESIZE_BORDER, min_size: tuple[int, int] = (940, 600),
-                          on_state=lambda maximized: None) -> None:
-    """Deja un borde fino alrededor de la página que maneja la propia ventana para
-    redimensionarla (la página procesa el ratón en otro proceso, así que no puede)."""
+def install_frame(form, border: int = RESIZE_BORDER, on_state=lambda maximized: None) -> int:
+    """Marco nativo (Windows anima minimizar/maximizar) y borde fino alrededor de la página
+    para redimensionar. Devuelve el identificador de la ventana."""
     from System import Action
-    from System.Drawing import Rectangle
-    from System.Windows.Forms import Control, Cursors, FormWindowState, MouseButtons, Padding, Screen
+    from System.Windows.Forms import FormWindowState, Padding
 
-    cursors = {"left": Cursors.SizeWE, "right": Cursors.SizeWE, "top": Cursors.SizeNS, "bottom": Cursors.SizeNS,
-               "topleft": Cursors.SizeNWSE, "bottomright": Cursors.SizeNWSE,
-               "topright": Cursors.SizeNESW, "bottomleft": Cursors.SizeNESW}
-    drag: dict = {}
+    from . import nativeframe
 
-    def edge_at(x: int, y: int) -> str | None:
-        w, h = form.ClientSize.Width, form.ClientSize.Height
-        c = border * 3
-        v = "top" if y < c else "bottom" if y >= h - c else ""
-        hz = "left" if x < c else "right" if x >= w - c else ""
-        if v and hz:
-            return v + hz
-        if x < border:
-            return "left"
-        if x >= w - border:
-            return "right"
-        if y < border:
-            return "top"
-        if y >= h - border:
-            return "bottom"
-        return None
-
-    def on_down(sender, e):
-        edge = edge_at(e.X, e.Y)
-        if e.Button == MouseButtons.Left and edge:
-            p = Control.MousePosition
-            b = form.Bounds
-            drag.update(edge=edge, x0=p.X, y0=p.Y, start=(b.X, b.Y, b.Width, b.Height))
-            form.Capture = True
-
-    def on_move(sender, e):
-        if drag:
-            p = Control.MousePosition
-            x, y, w, h = resize_bounds(drag["edge"], drag["start"], p.X - drag["x0"], p.Y - drag["y0"], *min_size)
-            form.Bounds = Rectangle(x, y, w, h)
-        else:
-            form.Cursor = cursors.get(edge_at(e.X, e.Y), Cursors.Default)
-
-    def on_up(sender, e):
-        drag.clear()
-        form.Capture = False
-
-    def update_max_bounds(*_):
-        scr = Screen.FromControl(form)
-        b, w = scr.Bounds, scr.WorkingArea
-        x, y, ww, hh = maximized_bounds((b.X, b.Y, b.Width, b.Height), (w.X, w.Y, w.Width, w.Height))
-        form.MaximizedBounds = Rectangle(x, y, ww, hh)
+    state: dict = {}
 
     def on_resize(sender, e):
         maximized = form.WindowState == FormWindowState.Maximized
@@ -130,25 +60,14 @@ def install_resize_border(form, border: int = RESIZE_BORDER, min_size: tuple[int
             state["max"] = maximized
             on_state(maximized)
 
-    state: dict = {}
-
     def install():
+        state["hwnd"] = int(form.Handle.ToInt64())
+        nativeframe.install(state["hwnd"], border)
         form.Padding = Padding(border)
-        update_max_bounds()
-        form.MouseDown += on_down
-        form.MouseMove += on_move
-        form.MouseUp += on_up
         form.Resize += on_resize
-        form.LocationChanged += update_max_bounds
 
     form.Invoke(Action(install))
-
-
-def set_border(form, border: int) -> None:
-    from System import Action
-    from System.Windows.Forms import Padding
-
-    form.Invoke(Action(lambda: setattr(form, "Padding", Padding(border))))
+    return state["hwnd"]
 
 
 class MainWindow:
@@ -176,18 +95,15 @@ class MainWindow:
         self.window.events.closing += self._on_closing
 
     def _on_shown(self):
-        import os
+        from .winchrome import apply_chrome
 
-        from .winchrome import apply_chrome, find_window
-
-        self.hwnd = find_window("Transcriptor", os.getpid())
+        try:
+            self.hwnd = install_frame(self.window.native,
+                                      on_state=lambda m: self.push({"type": "window", "maximized": m}))
+        except Exception:  # noqa: BLE001
+            log.warning("No se pudo preparar el marco nativo", exc_info=True)
         if self.hwnd:
             apply_chrome(self.hwnd)
-        try:
-            install_resize_border(self.window.native,
-                                  on_state=lambda m: self.push({"type": "window", "maximized": m}))
-        except Exception:  # noqa: BLE001
-            log.warning("No se pudo preparar el borde para redimensionar", exc_info=True)
 
     def get_hwnd(self) -> int | None:
         if not self.hwnd:
