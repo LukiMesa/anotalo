@@ -201,17 +201,10 @@ def test_api_window_controls_delegate(env):
         def minimize(self): calls.append("min")
         def toggle_maximize(self): calls.append("max"); return True
         def hide(self): calls.append("hide")
-        def start_drag(self): calls.append("drag")
-        def start_resize(self, edge):
-            if edge != "left":
-                raise ValueError("borde")
-            calls.append("resize")
 
     api._chrome = C()
     api.window_minimize()
     assert api.window_toggle_maximize() == {"ok": True, "maximized": True}
     api.window_close()
-    api.window_start_drag()
-    assert api.window_start_resize("left") == {"ok": True}
-    assert api.window_start_resize("x")["ok"] is False
-    assert calls == ["min", "max", "hide", "drag", "resize"]
+    assert calls == ["min", "max", "hide"]
+    assert not hasattr(api, "window_start_drag") and not hasattr(api, "window_start_resize")

@@ -257,17 +257,6 @@ class Api:
         self._chrome.hide()
         return {"ok": True}
 
-    def window_start_drag(self) -> dict:
-        self._chrome.start_drag()
-        return {"ok": True}
-
-    def window_start_resize(self, edge: str) -> dict:
-        try:
-            self._chrome.start_resize(edge)
-            return {"ok": True}
-        except ValueError as e:
-            return _err(str(e))
-
     def choose_folder(self) -> dict:
         p = self._folder_dialog()
         if not p:

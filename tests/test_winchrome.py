@@ -56,3 +56,9 @@ def test_main_window_exposes_hwnd_for_chrome():
     w = object.__new__(MainWindow)
     w.hwnd = 1234
     assert w.get_hwnd() == 1234
+
+
+def test_find_window_removed():
+    import calltx.ui.winchrome as wc
+
+    assert not hasattr(wc, "find_window") and not hasattr(wc.Win32, "send_nc")

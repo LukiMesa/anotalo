@@ -27,16 +27,6 @@ svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-widt
 .tb-btn:focus-visible { outline-offset: -2px; }
 .dot.preparing { background: var(--line-strong); animation: pulse 1.6s var(--ease-out) infinite; }
 /* asas invisibles para redimensionar desde los bordes */
-.rz { position: fixed; z-index: 10; }
-.rz[data-edge="top"] { top: 0; left: 8px; right: 8px; height: 4px; cursor: ns-resize; }
-.rz[data-edge="bottom"] { bottom: 0; left: 8px; right: 8px; height: 5px; cursor: ns-resize; }
-.rz[data-edge="left"] { left: 0; top: 8px; bottom: 8px; width: 5px; cursor: ew-resize; }
-.rz[data-edge="right"] { right: 0; top: 8px; bottom: 8px; width: 5px; cursor: ew-resize; }
-.rz[data-edge="topleft"] { left: 0; top: 0; width: 8px; height: 8px; cursor: nwse-resize; }
-.rz[data-edge="topright"] { right: 0; top: 0; width: 8px; height: 8px; cursor: nesw-resize; }
-.rz[data-edge="bottomleft"] { left: 0; bottom: 0; width: 8px; height: 8px; cursor: nesw-resize; }
-.rz[data-edge="bottomright"] { right: 0; bottom: 0; width: 8px; height: 8px; cursor: nwse-resize; }
-body.maximized .rz { display: none; }
 
 /* barra lateral */
 .side { width: 216px; flex: none; background: var(--surface-sunken); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 16px 12px 12px; }

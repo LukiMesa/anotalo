@@ -106,12 +106,7 @@ class MainWindow:
             apply_chrome(self.hwnd)
 
     def get_hwnd(self) -> int | None:
-        if not self.hwnd:
-            import os
-
-            from .winchrome import find_window
-
-            self.hwnd = find_window("Transcriptor", os.getpid())
+        """Identificador de la ventana (lo da la propia ventana al preparar su marco)."""
         return self.hwnd
 
     def hide(self) -> None:
