@@ -6,7 +6,10 @@ button { cursor: pointer; }
 svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
-.app { display: flex; height: calc(100vh - 40px); }
+/* La ventana nunca se desplaza: cada lista y sección tiene su propio scroll. Sin esto, la
+   animación de entrada (sube 6 px) desborda un instante y aparece la barra de scroll. */
+html, body { overflow: hidden; }
+.app { display: flex; height: calc(100vh - 40px); overflow: hidden; }
 
 /* barra superior propia */
 .titlebar { app-region: drag; height: 40px; display: flex; align-items: center; background: var(--surface-sunken); border-bottom: 1px solid var(--line); user-select: none; position: relative; z-index: 5; }
