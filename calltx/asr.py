@@ -153,9 +153,16 @@ class Transcriber:
         self._model: Any = None
         self.device = self.resolved.device
         self.model_name = self.resolved.model
+        self.compute_type = self.resolved.compute_type
         self.fallback_used = False
 
     def start(self, on_progress=None) -> None:
+        self.load(on_progress)
+        self._thread = threading.Thread(target=self._run, name="asr", daemon=True)
+        self._thread.start()
+
+    def load(self, on_progress=None) -> None:
+        """Carga y calienta el modelo (con respaldo a CPU si la GPU falla), sin hilo de trabajo."""
         extra = {"on_progress": on_progress} if on_progress is not None else {}
         try:
             r = self.resolved
@@ -169,14 +176,17 @@ class Transcriber:
             fb = cpu_fallback(self._s)
             log.warning("No se pudo usar la GPU (%s); paso al procesador con '%s'", e, fb.model)
             self.fallback_used = True
-            self.device, self.model_name = "cpu", fb.model
+            self.device, self.model_name, self.compute_type = "cpu", fb.model, fb.compute_type
             self._model = self._factory(model=fb.model, device="cpu", compute_type=fb.compute_type, **extra)
             self.warmup()
-        self._thread = threading.Thread(target=self._run, name="asr", daemon=True)
-        self._thread.start()
 
     def warmup(self) -> None:
         self._transcribe(np.zeros(16000, dtype=np.float32))
+
+    def transcribe_filtered(self, audio: np.ndarray) -> str | None:
+        """Texto de una frase, o None si es una alucinación."""
+        text, logprob, nsp = self._transcribe(audio)
+        return None if is_hallucination(text, logprob, nsp) else text
 
     def submit(self, seg: Segment, on_result: ResultCb) -> None:
         self._q.put((seg, on_result))
