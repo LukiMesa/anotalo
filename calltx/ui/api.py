@@ -22,8 +22,9 @@ log = logging.getLogger(__name__)
 MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
 EDITABLE = {
     "copy_on_stop", "show_indicator", "autostart", "auto_mode", "detect_teams", "detect_meet",
-    "label_me", "label_others", "model", "language", "output_dir", "hotkey",
+    "label_me", "label_others", "model", "language", "output_dir", "hotkey", "release_after_min",
 }
+RELEASE_OPTIONS = {0, 2, 10, 30}  # minutos; 0 = nunca
 
 
 def _dur(seconds: int | None) -> str:
@@ -195,6 +196,13 @@ class Api:
     def set_setting(self, key: str, value) -> dict:
         if key not in EDITABLE:
             return _err(f"Ajuste desconocido: {key}")
+        if key == "release_after_min":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                value = None
+            if value not in RELEASE_OPTIONS:
+                return _err("Valor no válido")
         try:
             msg = self._app.apply_setting(key, value)
         except Exception as e:  # noqa: BLE001

@@ -55,3 +55,7 @@ def test_migrate_cuda_to_auto(tmp_path):
     p.write_text(json.dumps({"device": "cuda", "model": "large-v3-turbo", "compute_type": "float16"}), encoding="utf-8")
     s = load_settings(p)
     assert s.device == "auto" and s.model == "large-v3-turbo"
+
+
+def test_release_after_default_is_ten_minutes():
+    assert Settings().release_after_min == 10

@@ -95,6 +95,7 @@ class RemoteTranscriber:
         busy: Callable[[], bool] = lambda: False,
         factory: str | None = None,
         poll_s: float = 1.0,
+        on_change: Callable[[], None] | None = None,
     ):
         self._s = settings
         self.resolved = resolved
@@ -102,6 +103,7 @@ class RemoteTranscriber:
         self._busy = busy
         self._factory = factory
         self._poll = poll_s
+        self._on_change = on_change  # se avisa al cargar y al liberar (para la ventana)
         self._ctx = mp.get_context("spawn")
         self._cv = threading.Condition(threading.RLock())
         self._pending: dict[int, tuple[Segment, ResultCb]] = {}  # en orden de llegada
@@ -175,6 +177,11 @@ class RemoteTranscriber:
             self._watcher = None
 
     # --- interno (todo con self._cv tomado) -------------------------------------
+    def _changed(self) -> None:
+        cb = self._on_change
+        if cb is not None:
+            threading.Thread(target=cb, name="asr-changed", daemon=True).start()
+
     def _spawn(self, on_progress=None) -> None:
         self._gen += 1
         gen = self._gen
@@ -204,6 +211,7 @@ class RemoteTranscriber:
         proc, conn = self._proc, self._conn
         self._gen += 1  # el lector del hijo viejo ya no cuenta
         self._state, self._proc, self._conn = "down", None, None
+        self._changed()
         if conn is not None:
             try:
                 conn.send(("stop",))
@@ -231,9 +239,13 @@ class RemoteTranscriber:
         self.resolved = Resolved(device, compute_type, model, needs_cuda=False)
         for sid, (seg, _cb) in self._pending.items():
             self._send(("seg", sid, seg.audio))
+        self._changed()
 
     def _on_dead(self) -> None:
+        was_up = self._state == "up"
         self._state, self._proc, self._conn = "down", None, None
+        if was_up:
+            self._changed()
         if self._closed or not (self._pending or self._busy()):
             return
         self._deaths += 1
@@ -314,3 +326,33 @@ class RemoteTranscriber:
                     log.info("Sin uso durante %.0f s: libero el proceso de transcripción", self.idle_s)
                     self._release()
                 self._cv.wait(self._poll)
+
+
+# --- autodiagnóstico del ejecutable ----------------------------------------------
+class _EchoModel:
+    def transcribe(self, audio, **kw):
+        from types import SimpleNamespace
+
+        return iter([SimpleNamespace(text=" ok", avg_logprob=-0.1, no_speech_prob=0.0)]), None
+
+
+def _echo_factory(model, device, compute_type, on_progress=None):
+    return _EchoModel()
+
+
+def selftest_roundtrip(timeout: float = 60) -> str:
+    """Lanza un proceso hijo de verdad (con un modelo de eco) y devuelve el texto que contesta.
+    Comprueba que el ejecutable empaquetado puede arrancar su proceso de transcripción."""
+    import numpy as np
+
+    t = RemoteTranscriber(Settings(), Resolved("cpu", "int8", "eco", needs_cuda=False), idle_s=None,
+                          factory="calltx.asr_remote:_echo_factory")
+    out: list[str] = []
+    try:
+        t.start()
+        t.submit(Segment("Yo", 0.0, 0.1, np.full(1600, 0.1, np.float32)), lambda s, text: out.append(text))
+        if not t.wait_idle(timeout):
+            raise RuntimeError("el proceso de transcripción no contestó")
+    finally:
+        t.stop()
+    return out[0] if out else ""

@@ -39,6 +39,7 @@ class Settings:
     autostart_configured: bool = False
     detect_teams: bool = True
     detect_meet: bool = True
+    release_after_min: int = 10  # liberar el modelo tras N min sin grabar (0 = nunca)
 
 
 def default_config_path() -> Path:

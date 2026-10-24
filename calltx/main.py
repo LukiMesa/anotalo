@@ -104,6 +104,13 @@ def selftest() -> int:
         SileroVad().prob(np.zeros(512, np.float32))
     except Exception as e:  # noqa: BLE001
         problems.append(f"VAD: {e}")
+    try:
+        from .asr_remote import selftest_roundtrip
+
+        if selftest_roundtrip() != "ok":
+            problems.append("proceso de transcripción: respuesta inesperada")
+    except Exception as e:  # noqa: BLE001
+        problems.append(f"proceso de transcripción: {e}")
     for mod in ("ctranslate2", "faster_whisper", "webview", "pystray", "comtypes", "pyaudiowpatch", "soxr"):
         try:
             __import__(mod)
@@ -136,7 +143,7 @@ def main() -> int:
     import webview
 
     from . import autostart
-    from .asr import Transcriber
+    from .asr_remote import RemoteTranscriber
     from .audio.sources import MicSource, find_root_pid, open_call_audio
     from .clipboard import set_text as copy_text
     from .detector import CallApp, CallDetector
@@ -176,8 +183,18 @@ def main() -> int:
     told_old_driver = {"v": False}  # aviso una vez por arranque
     holder_app: dict = {}
     plan = {"resolved": None}
-    models = ModelHolder(lambda: Transcriber(settings, resolved=plan["resolved"]),
-                         busy=lambda: holder_app["app"].state == "recording" or holder_app["app"].busy)
+    def recording_busy() -> bool:
+        return holder_app["app"].state == "recording" or holder_app["app"].busy
+
+    def idle_s() -> float | None:
+        return settings.release_after_min * 60 if settings.release_after_min else None
+
+    # Whisper vive en un proceso aparte que se cierra en reposo (ver calltx/asr_remote.py).
+    models = ModelHolder(
+        lambda: RemoteTranscriber(settings, plan["resolved"], idle_s=idle_s(), busy=recording_busy,
+                                  on_change=lambda: push_state()),
+        busy=recording_busy,
+    )
 
     load_lock = threading.Lock()
     last_pct = {"v": -1}
@@ -242,11 +259,13 @@ def main() -> int:
         t = models.current
         if t is None:
             return "Cargando modelo…"
+        rest = "" if getattr(t, "loaded", True) else " · en reposo"
         if t.device == "cuda":
-            return f"GPU · {gpu['name'] or 'NVIDIA'} · {t.model_name}"
-        return f"Procesador{' (respaldo)' if t.fallback_used else ''} · {t.model_name}"
+            return f"GPU · {gpu['name'] or 'NVIDIA'} · {t.model_name}{rest}"
+        return f"Procesador{' (respaldo)' if t.fallback_used else ''} · {t.model_name}{rest}"
 
     def session_factory(label: str, exe: str | None, on_line, on_level=None):
+        models.current.warm()  # el modelo carga mientras ya se graba
         mic = MicSource(settings.mic_device)
         if exe is None:
             log.info("Nota rápida: solo micrófono")
@@ -332,6 +351,11 @@ def main() -> int:
     def apply_model(_value):
         threading.Thread(target=load_model, name="model-reload", daemon=True).start()
 
+    def apply_release_after(_value):
+        t = models.current
+        if t is not None:
+            t.idle_s = idle_s()
+
     def apply_output_dir(value):
         Path(value).mkdir(parents=True, exist_ok=True)
 
@@ -344,6 +368,7 @@ def main() -> int:
         "model": apply_model,
         "language": apply_model,
         "output_dir": lambda _v: win.push({"type": "recordings"}),
+        "release_after_min": apply_release_after,
     })
 
     # --- bandeja y salida ----------------------------------------------------

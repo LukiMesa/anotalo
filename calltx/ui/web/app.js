@@ -235,7 +235,7 @@ async function save(key, value) {
 function renderSettings() {
   $$("[data-setting]").forEach((b) => b.setAttribute("aria-checked", !!S.settings[b.dataset.setting]));
   $$("[data-text]").forEach((i) => { i.value = S.settings[i.dataset.text] ?? ""; });
-  $$("[data-select]").forEach((s) => { s.value = S.settings[s.dataset.select]; });
+  $$("[data-select]").forEach((s) => { s.value = String(S.settings[s.dataset.select]); });
   $("#folder").textContent = S.settings.output_dir || "";
   renderKeyfield(false);
 }
@@ -251,7 +251,7 @@ $$("[data-text]").forEach((i) => i.addEventListener("change", async () => {
 }));
 $$("[data-select]").forEach((s) => s.addEventListener("change", async () => {
   if (!(await save(s.dataset.select, s.value))) s.value = S.settings[s.dataset.select];
-  else toast(`<span class="ok">${icon("check")}</span>Cargando el modelo en segundo plano`);
+  else if (s.dataset.select !== "release_after_min") toast(`<span class="ok">${icon("check")}</span>Cargando el modelo en segundo plano`);
 }));
 $("#open-folder").onclick = () => api().open_folder();
 $("#choose-folder").onclick = async () => {

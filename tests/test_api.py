@@ -208,3 +208,21 @@ def test_api_window_controls_delegate(env):
     api.window_close()
     assert calls == ["min", "max", "hide"]
     assert not hasattr(api, "window_start_drag") and not hasattr(api, "window_start_resize")
+
+
+def test_release_after_saved_as_int(tmp_path):
+    app = FakeApp()
+    api = Api(app, clipboard_set=lambda t: None, save_dialog=lambda n: None)
+    assert api.get_settings()["release_after_min"] == 10
+    assert api.set_setting("release_after_min", "2") == {"ok": True}
+    assert app.settings.release_after_min == 2
+    assert api.set_setting("release_after_min", 0) == {"ok": True}
+    assert app.settings.release_after_min == 0
+
+
+@pytest.mark.parametrize("bad", ["5", "x", None, -1])
+def test_release_after_rejects_other_values(bad):
+    app = FakeApp()
+    api = Api(app, clipboard_set=lambda t: None, save_dialog=lambda n: None)
+    assert api.set_setting("release_after_min", bad)["ok"] is False
+    assert app.settings.release_after_min == 10

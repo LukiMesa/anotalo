@@ -162,3 +162,18 @@ def test_wait_idle_includes_segments_queued_while_starting(remote):
     assert not t.loaded
     assert t.wait_idle(30)
     assert c.results == ["hola"]
+
+
+def test_notifies_loaded_changes(remote):
+    seen = []
+    t = remote(idle_s=0.2)
+    t._on_change = lambda: seen.append(t.loaded)
+    t.start()
+    assert wait_for(lambda: False in seen, 10)
+    assert seen[0] is True and seen[-1] is False
+
+
+def test_selftest_roundtrip_spawns_real_child():
+    from calltx.asr_remote import selftest_roundtrip
+
+    assert selftest_roundtrip() == "ok"
