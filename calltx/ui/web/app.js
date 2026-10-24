@@ -72,14 +72,20 @@ function show(view) {
 $$(".nav").forEach((b) => b.addEventListener("click", () => show(b.dataset.view)));
 
 // --- lista --------------------------------------------------------------
-async function loadList() {
-  S.items = await api().list_recordings(S.kind, S.query);
+// animate: "stagger" (carga inicial, filtro, búsqueda) | "new" (solo las filas nuevas) | false
+let listGen = 0;
+async function loadList(animate = "new") {
+  const gen = ++listGen;
+  const items = await api().list_recordings(S.kind, S.query);
+  if (gen !== listGen) return;  // llegó una carga más reciente: esta ya no vale
+  S.items = items;
   if (S.kind === "all" && !S.query) $("#count").textContent = S.items.length || "";
-  renderList();
+  renderList(animate);
   if (!S.items.find((i) => i.id === S.selected)) select(S.items[0]?.id || null);
 }
-function renderList() {
+function renderList(animate = false) {
   const box = $("#items");
+  const before = new Set($$(".item", box).map((b) => b.dataset.id));
   if (!S.items.length) {
     box.innerHTML = `<div class="empty"><div>${S.query ? `<b>Sin resultados</b>Nada coincide con “${esc(S.query)}”.` : "<b>Aún no hay grabaciones</b>Entra en una llamada o pulsa el atajo para una nota rápida."}</div></div>`;
     return;
@@ -95,7 +101,19 @@ function renderList() {
       <span class="snip">${esc(it.snippet) || (it.live ? "<i>Sin texto todavía</i>" : "<i>Sin texto</i>")}</span></span></button>`;
   }
   box.innerHTML = html;
-  $$(".item", box).forEach((b) => b.addEventListener("click", () => select(b.dataset.id)));
+  const rows = $$(".item", box);
+  rows.forEach((b) => b.addEventListener("click", () => select(b.dataset.id)));
+  if (animate === "stagger") {
+    const step = ms("--stagger-step");
+    rows.slice(0, 8).forEach((b, i) => enter(b, { delay: i * step }));
+  } else if (animate === "new" && before.size) {
+    rows.filter((b) => !before.has(b.dataset.id)).forEach((b) => enter(b));
+  }
+}
+function leave(el) {
+  if (!el || !motionOK()) return Promise.resolve();
+  return el.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateX(-8px) scale(.98)" }],
+    { duration: ms("--duration-quick"), easing: token("--ease-in"), fill: "forwards" }).finished.catch(() => {});
 }
 $("#items").addEventListener("keydown", (e) => {
   if (!["ArrowDown", "ArrowUp"].includes(e.key)) return;
@@ -105,12 +123,12 @@ $("#items").addEventListener("keydown", (e) => {
   if (next) { select(next.id); $(`.item[data-id="${CSS.escape(next.id)}"]`)?.focus(); }
 });
 let qTimer;
-$("#q").addEventListener("input", (e) => { clearTimeout(qTimer); qTimer = setTimeout(() => { S.query = e.target.value.trim(); loadList(); }, 200); });
+$("#q").addEventListener("input", (e) => { clearTimeout(qTimer); qTimer = setTimeout(() => { S.query = e.target.value.trim(); loadList("stagger"); }, 200); });
 $$(".seg button").forEach((b) => b.addEventListener("click", () => {
   S.kind = b.dataset.kind;
   $$(".seg button").forEach((x) => x.setAttribute("aria-pressed", x === b));
   moveThumb();
-  loadList();
+  loadList("stagger");
 }));
 
 // --- detalle ------------------------------------------------------------
@@ -144,7 +162,8 @@ function lineHtml(l, fresh = false) {
 async function remove(id) {
   const res = await api().delete(id);
   if (!res.ok) { toast(esc(res.error)); return; }
-  await loadList();
+  await leave($(`.item[data-id="${CSS.escape(id)}"]`));
+  await loadList(false);
   const t = toast(`Grabación borrada <button id="undo">Deshacer</button>`, 5000);
   let undone = false;
   $("#undo", t).onclick = async () => { undone = true; await api().undo(res.token); t.classList.remove("on"); await loadList(); select(id); };
@@ -313,5 +332,5 @@ window.addEventListener("pywebviewready", async () => {
   S.settings = await api().get_settings();
   renderSettings();
   renderState(await api().get_state());
-  await loadList();
+  await loadList("stagger");
 });
