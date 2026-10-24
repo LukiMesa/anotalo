@@ -23,3 +23,12 @@ def test_web_dir_has_index():
 
 def test_cuda_dir_in_localappdata():
     assert paths.cuda_dir().parts[-2:] == ("Transcriptor", "cuda")
+
+
+def test_dev_and_installed_serve_the_page_on_different_ports():
+    # pywebview sirve la página en un puerto local fijo: si coinciden, la copia de desarrollo
+    # carga los archivos de la instalada (o al revés).
+    from calltx.paths import http_port
+
+    assert http_port(frozen=True) != http_port(frozen=False)
+    assert all(1024 < http_port(frozen=f) < 65536 for f in (True, False))

@@ -372,8 +372,8 @@ def main() -> int:
         log.info("Transcriptor iniciado (atajo %s, modo automático %s)", settings.hotkey, settings.auto_mode)
 
     storage = cfg_path.parent / "webview"
-    from .paths import assets_dir
+    from .paths import assets_dir, http_port
 
     webview.start(bootstrap, gui="edgechromium", private_mode=False, storage_path=str(storage),
-                  icon=str(assets_dir() / "icon.ico"))
+                  icon=str(assets_dir() / "icon.ico"), http_port=http_port())
     return 0

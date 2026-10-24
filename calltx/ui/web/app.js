@@ -6,6 +6,33 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const api = () => window.pywebview.api;
 
+// --- movimiento ----------------------------------------------------------
+// Duraciones y curvas salen de tokens.css. Con "Efectos de animación" desactivado en Windows,
+// WebView2 informa prefers-reduced-motion y todo pasa a su estado final sin animar.
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const motionOK = () => !reduceMotion.matches;
+const token = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const ms = (name) => parseFloat(token(name)) || 0;
+function enter(el, { y = ms("--rise"), scale = 1, duration = ms("--duration-view"), delay = 0 } = {}) {
+  if (!el || !motionOK()) return null;
+  return el.animate(
+    [{ opacity: 0, transform: `translateY(${y}px) scale(${scale})` }, { opacity: 1, transform: "none" }],
+    { duration, delay, easing: token("--ease-out"), fill: "backwards" });
+}
+function moveMarker(instant = false) {
+  const a = $('.nav[aria-current="page"]'), m = $(".nav-marker");
+  if (!a || !m) return;
+  m.classList.toggle("instant", instant || !motionOK());
+  m.style.transform = `translateY(${a.offsetTop + (a.offsetHeight - m.offsetHeight) / 2}px)`;
+}
+function moveThumb(instant = false) {
+  const b = $('.seg button[aria-pressed="true"]'), t = $(".seg-thumb");
+  if (!b || !t || !b.offsetWidth) return;
+  t.classList.toggle("instant", instant || !motionOK());
+  t.style.width = b.offsetWidth + "px";
+  t.style.transform = `translateX(${b.offsetLeft}px)`;
+}
+
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const fold = (s) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase();
 function highlight(text, q) {
@@ -40,6 +67,7 @@ function show(view) {
   S.view = view;
   $$(".nav").forEach((b) => b.dataset.view === view ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
   $$(".view").forEach((v) => v.classList.toggle("on", v.id === "view-" + view));
+  moveMarker();
 }
 $$(".nav").forEach((b) => b.addEventListener("click", () => show(b.dataset.view)));
 
@@ -81,6 +109,7 @@ $("#q").addEventListener("input", (e) => { clearTimeout(qTimer); qTimer = setTim
 $$(".seg button").forEach((b) => b.addEventListener("click", () => {
   S.kind = b.dataset.kind;
   $$(".seg button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+  moveThumb();
   loadList();
 }));
 
@@ -106,6 +135,7 @@ async function select(id) {
   $("#act-copy").onclick = async () => { const res = await api().copy(id); toast(res.ok ? `<span class="ok">${icon("check")}</span>Copiado al portapapeles` : esc(res.error)); };
   $("#act-save").onclick = async () => { const res = await api().save_as(id); if (res.ok) toast(`<span class="ok">${icon("check")}</span>Guardado`); else if (!res.cancelled) toast(esc(res.error)); };
   $("#act-del").onclick = () => remove(id);
+  enter(d, { y: 0, duration: ms("--duration-fast") });
 }
 function lineHtml(l, fresh = false) {
   return `<div class="line${fresh ? " new" : ""}"><span class="ts">${esc(l.ts)}</span><div>
@@ -159,6 +189,7 @@ function renderState(st) {
   renderTimer();
   const labels = { idle: "Inactivo", armed: "Esperando llamada", recording: "Grabando", preparing: "Preparando…" };
   $("#state-dot").className = "dot " + S.state.state;
+  if (S.state.state !== was) enter($("#state-text"), { y: 0, duration: ms("--duration-fast") });
   const pct = S.state.progress != null ? ` · ${Math.round(S.state.progress * 100)} %` : "";
   $("#state-text").textContent = S.state.state === "preparing"
     ? `Preparando…${pct}` : (labels[S.state.state] || "") + (S.state.state !== "recording" ? pct : "");
@@ -253,12 +284,14 @@ async function toggleMax() {
 }
 function setMaxIcon(maximized) {
   const r = { maximized };
+  const changed = document.body.classList.contains("maximized") !== !!r.maximized;
   document.body.classList.toggle("maximized", !!r.maximized);
   $("#tb-max").setAttribute("aria-label", r.maximized ? "Restaurar" : "Maximizar");
   $("#tb-max").title = r.maximized ? "Restaurar" : "Maximizar";
   $("#tb-max").innerHTML = r.maximized
     ? '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="4" width="12" height="12" rx="1.5"/><path d="M16 16v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2"/></svg>'
     : '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>';
+  if (changed) enter($("#tb-max svg"), { y: 0, scale: 0.8, duration: ms("--duration-fast") });
 }
 $("#tb-max").onclick = toggleMax;
 $("#tb-close").onclick = () => api().window_close();
@@ -268,6 +301,14 @@ window.addEventListener("blur", () => { if (listening) renderKeyfield(false); })
 document.addEventListener("visibilitychange", () => { if (document.hidden && listening) renderKeyfield(false); });
 
 // --- arranque -----------------------------------------------------------
+// Marcador de la barra lateral e indicador del filtro: elementos que se deslizan.
+$(".side").prepend(Object.assign(document.createElement("span"), { className: "nav-marker" }));
+$(".seg").prepend(Object.assign(document.createElement("span"), { className: "seg-thumb" }));
+$$(".nav-marker, .seg-thumb").forEach((el) => el.setAttribute("aria-hidden", "true"));
+moveMarker(true);
+moveThumb(true);
+new ResizeObserver(() => moveThumb(true)).observe($(".seg"));
+
 window.addEventListener("pywebviewready", async () => {
   S.settings = await api().get_settings();
   renderSettings();

@@ -28,6 +28,10 @@
   --duration-fast: 150ms;
   --duration-base: 250ms;
   --duration-exit: 180ms;
+  --duration-quick: 120ms;
+  --duration-view: 200ms;
+  --rise: 6px;
+  --stagger-step: 35ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in: cubic-bezier(0.55, 0, 1, 0.45);
   --font-display: "Sora", "Segoe UI", system-ui, sans-serif;

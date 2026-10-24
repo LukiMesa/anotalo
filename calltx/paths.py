@@ -56,3 +56,10 @@ def instance_names(frozen: bool | None = None) -> tuple[str, str]:
     if _f(frozen):
         return "CallTranscriberMutex", "CallTranscriberShow"
     return "CallTranscriberDevMutex", "CallTranscriberDevShow"
+
+
+def http_port(frozen: bool | None = None) -> int:
+    """Puerto local donde pywebview sirve la página. La instalada usa el de siempre (42001: así
+    conserva sus datos de navegador); la de desarrollo, otro, para no cargar los archivos de la
+    instalada cuando ambas están abiertas."""
+    return 42001 if _f(frozen) else 42011
