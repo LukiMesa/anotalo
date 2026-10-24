@@ -155,3 +155,16 @@ def test_download_progress_bar_without_console(monkeypatch):
     b.update(500)
     b.close()
     assert seen and 0.4 < seen[-1] < 0.6
+
+
+def test_dev_does_not_use_installed_cuda_dir(tmp_path, monkeypatch):
+    import calltx.asr as asr
+    import calltx.paths as paths
+
+    (tmp_path / "cublas").mkdir()
+    added = []
+    monkeypatch.setattr(paths, "cuda_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "is_frozen", lambda: False)
+    monkeypatch.setattr(asr.os, "add_dll_directory", lambda d: added.append(d))
+    asr._add_cuda_dll_dirs()
+    assert str(tmp_path / "cublas") not in added

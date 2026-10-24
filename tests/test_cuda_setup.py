@@ -127,3 +127,17 @@ def test_runs_are_serialized(tmp_path):
         t.join()
     assert overlaps == []
     assert CudaSetup(tmp_path, None, None).is_ready()
+
+
+def test_wheel_pins_match_dev_venv():
+    from importlib.metadata import PackageNotFoundError, version
+
+    import pytest
+
+    from calltx.cuda_setup import WHEELS
+
+    for name, ver in WHEELS:
+        try:
+            assert version(name) == ver, name
+        except PackageNotFoundError:
+            pytest.skip(f"{name} no instalado")

@@ -19,15 +19,34 @@ class Resolved:
     needs_cuda: bool  # hay que descargar los componentes de GPU antes de cargar
 
 
-def has_nvidia_driver(loader: Callable[[str], object] = ctypes.WinDLL) -> bool:
-    """True si el PC tiene driver NVIDIA (nvcuda.dll se puede cargar)."""
+MIN_DRIVER_CUDA = 12000  # los componentes de GPU son de CUDA 12
+
+
+def driver_cuda_version(loader: Callable[[str], object] = ctypes.WinDLL) -> int | None:
+    """Versión de CUDA que admite el driver NVIDIA (p. ej. 12080), o None si no hay driver."""
     if os.environ.get("CALLTX_FORCE_CPU") == "1":
-        return False
+        return None
     try:
-        loader("nvcuda.dll")
-        return True
-    except OSError:
-        return False
+        dll = loader("nvcuda.dll")
+        v = ctypes.c_int(0)
+        if dll.cuDriverGetVersion(ctypes.byref(v)) != 0:
+            return None
+        return v.value or None
+    except (OSError, AttributeError):
+        return None
+
+
+def nvidia_status(get_version: Callable[[], int | None] = driver_cuda_version) -> str:
+    """"none": sin NVIDIA; "old": driver demasiado antiguo para CUDA 12; "ok": se puede usar."""
+    v = get_version()
+    if v is None:
+        return "none"
+    return "ok" if v >= MIN_DRIVER_CUDA else "old"
+
+
+def has_nvidia_driver(loader: Callable[[str], object] = ctypes.WinDLL) -> bool:
+    """True si hay driver NVIDIA válido para CUDA 12."""
+    return nvidia_status(lambda: driver_cuda_version(loader)) == "ok"
 
 
 def resolve(settings, nvidia: bool, cuda_ready: bool) -> Resolved:

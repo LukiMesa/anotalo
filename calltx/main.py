@@ -169,10 +169,11 @@ def main() -> int:
     from .models import ModelHolder
 
     from .cuda_setup import CudaSetup, CudaSetupError
-    from .device import cpu_fallback, has_nvidia_driver, resolve
+    from .device import cpu_fallback, nvidia_status, resolve
     from .paths import cuda_dir, is_frozen
 
     gpu = {"name": ""}
+    told_old_driver = {"v": False}  # aviso una vez por arranque
     holder_app: dict = {}
     plan = {"resolved": None}
     models = ModelHolder(lambda: Transcriber(settings, resolved=plan["resolved"]),
@@ -202,7 +203,12 @@ def main() -> int:
         app_ = holder_app["app"]
         last_pct["v"] = -1
         app_.set_preparing((0.0, "Cargando modelo…"), blocking=models.current is None)
-        nvidia = has_nvidia_driver()
+        status = nvidia_status()
+        nvidia = status == "ok"
+        if status == "old" and not told_old_driver["v"]:
+            told_old_driver["v"] = True
+            log.warning("Driver de NVIDIA sin soporte para CUDA 12: usando CPU")
+            _notifier("Driver de NVIDIA antiguo", "Usando CPU. Actualiza el driver para usar la GPU.")
         cuda = CudaSetup(cuda_dir())
         # En desarrollo las DLL de CUDA vienen del entorno de pip.
         cuda_ready = (not is_frozen()) or cuda.is_ready()

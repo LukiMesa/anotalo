@@ -65,11 +65,12 @@ def _add_cuda_dll_dirs() -> None:
     """Permite usar las DLL de CUDA instaladas como wheels de pip (sin CUDA del sistema)."""
     if sys.platform != "win32":
         return
-    from .paths import cuda_dir
+    from . import paths
 
-    # Versión instalada: DLL descargadas la primera vez en %LOCALAPPDATA%\Transcriptor\cuda
-    root = cuda_dir()
-    if root.is_dir():
+    # Versión instalada: DLL descargadas la primera vez en %LOCALAPPDATA%\Transcriptor\cuda.
+    # La de desarrollo usa solo las de su propio entorno.
+    root = paths.cuda_dir()
+    if paths.is_frozen() and root.is_dir():
         for d in [p for p in root.iterdir() if p.is_dir() and not p.name.startswith("_")]:
             os.add_dll_directory(str(d))
             os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")

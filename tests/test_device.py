@@ -37,4 +37,41 @@ def test_has_nvidia_driver_false_when_dll_missing():
         raise OSError("no está")
 
     assert has_nvidia_driver(loader) is False
-    assert has_nvidia_driver(lambda name: object()) is True
+
+    class Dll:
+        def __init__(self, v):
+            self.v = v
+
+        def cuDriverGetVersion(self, ref):
+            ref._obj.value = self.v
+            return 0
+
+    assert has_nvidia_driver(lambda name: Dll(12080)) is True
+    assert has_nvidia_driver(lambda name: Dll(11040)) is False
+
+
+def test_nvidia_status_versions():
+    from calltx.device import nvidia_status
+
+    assert nvidia_status(lambda: None) == "none"
+    assert nvidia_status(lambda: 11080) == "old"
+    assert nvidia_status(lambda: 12000) == "ok"
+
+
+def test_driver_version_force_cpu(monkeypatch):
+    from calltx.device import driver_cuda_version
+
+    monkeypatch.setenv("CALLTX_FORCE_CPU", "1")
+
+    def loader(name):
+        raise AssertionError("no debe cargar")
+
+    assert driver_cuda_version(loader=loader) is None
+
+
+def test_resolve_old_driver_uses_cpu_even_if_cuda_ready():
+    from calltx.config import Settings
+    from calltx.device import nvidia_status, resolve
+
+    r = resolve(Settings(), nvidia_status(lambda: 11080) == "ok", cuda_ready=True)
+    assert r.device == "cpu"
