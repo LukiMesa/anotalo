@@ -19,7 +19,12 @@ class FakeModel:
             if mark and not Path(mark).exists():
                 Path(mark).write_text("x")
                 os._exit(1)
-        text = TEXTS.get(key, "hola" if key == 0.9 else "")
+        if key == 0.95:
+            os._exit(1)  # esta frase tumba al hijo siempre
+        if key == 0.4:
+            text = "larga " * 100  # respuestas grandes: llenan el pipe de vuelta
+        else:
+            text = TEXTS.get(key, "hola" if key == 0.9 else "")
         return iter([SimpleNamespace(text=" " + text, avg_logprob=-0.2, no_speech_prob=0.05)]), None
 
 

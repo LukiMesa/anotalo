@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib
 import logging
 import multiprocessing as mp
+import queue
 import threading
 import time
 from dataclasses import asdict
@@ -29,7 +30,7 @@ from .segmenter import Segment
 log = logging.getLogger(__name__)
 
 ResultCb = Callable[[Segment, str], None]
-MAX_RESPAWNS = 3  # muertes seguidas del hijo antes de descartar lo pendiente
+MAX_RESPAWNS = 3  # muertes seguidas del hijo sin contestar nada antes de descartar la frase culpable
 
 
 # --- proceso hijo -------------------------------------------------------------
@@ -112,6 +113,7 @@ class RemoteTranscriber:
         self._gen = 0  # cada hijo tiene su generación; los mensajes de hijos viejos se ignoran
         self._proc: Any = None
         self._conn: Any = None
+        self._sendq: queue.Queue | None = None  # lo que va al hijo actual (lo envía su propio hilo)
         self._error: str | None = None
         self._deaths = 0
         self._last_used = time.monotonic()
@@ -194,29 +196,38 @@ class RemoteTranscriber:
         )
         proc.start()
         child.close()
-        self._proc, self._conn, self._state = proc, parent, "starting"
+        sendq: queue.Queue = queue.Queue()
+        self._proc, self._conn, self._sendq, self._state = proc, parent, sendq, "starting"
         log.info("Proceso de transcripción lanzado (%s, %s)", self.resolved.device, self.resolved.model)
         threading.Thread(target=self._read, args=(gen, parent, proc, on_progress),
                          name="asr-remote", daemon=True).start()
+        threading.Thread(target=self._sender, args=(parent, sendq), name="asr-send", daemon=True).start()
+
+    @staticmethod
+    def _sender(conn, sendq: queue.Queue) -> None:
+        """Envía al hijo sin tener el cerrojo: en Windows, send de una frase grande espera a que el
+        hijo la lea, y mientras tanto el lector tiene que poder seguir recibiendo resultados."""
+        while True:
+            msg = sendq.get()
+            if msg is None:
+                return
+            try:
+                conn.send(msg)
+            except (OSError, ValueError):
+                return  # el hijo murió: el lector lo detecta y reenvía lo pendiente
 
     def _send(self, msg) -> None:
-        try:
-            self._conn.send(msg)
-        except (OSError, ValueError, AttributeError):
-            pass  # el hijo murió: el lector lo detecta y reenvía lo pendiente
+        if self._sendq is not None:
+            self._sendq.put(msg)
 
-    def _release(self) -> None:
-        if self._state == "down":
+    def _drop_child(self) -> None:
+        """Olvida el hijo actual: corta su hilo de envío y cierra el proceso y el pipe aparte."""
+        proc, conn, sendq = self._proc, self._conn, self._sendq
+        self._state, self._proc, self._conn, self._sendq = "down", None, None, None
+        if sendq is not None:
+            sendq.put(None)
+        if proc is None:
             return
-        proc, conn = self._proc, self._conn
-        self._gen += 1  # el lector del hijo viejo ya no cuenta
-        self._state, self._proc, self._conn = "down", None, None
-        self._changed()
-        if conn is not None:
-            try:
-                conn.send(("stop",))
-            except (OSError, ValueError):
-                pass
 
         def finish():
             proc.join(5)
@@ -229,9 +240,16 @@ class RemoteTranscriber:
 
         threading.Thread(target=finish, name="asr-release", daemon=True).start()
 
+    def _release(self) -> None:
+        if self._state == "down":
+            return
+        self._gen += 1  # el lector del hijo viejo ya no cuenta
+        self._send(("stop",))
+        self._drop_child()
+        self._changed()
+
     def _on_ready(self, device, model, compute_type, fallback) -> None:
         self._state = "up"
-        self._deaths = 0
         self._last_used = time.monotonic()  # recién cargado: cuenta atrás completa
         self.device, self.model_name = device, model
         self.fallback_used = self.fallback_used or fallback
@@ -243,18 +261,22 @@ class RemoteTranscriber:
 
     def _on_dead(self) -> None:
         was_up = self._state == "up"
-        self._state, self._proc, self._conn = "down", None, None
+        self._drop_child()
         if was_up:
             self._changed()
         if self._closed or not (self._pending or self._busy()):
             return
         self._deaths += 1
         if self._deaths > MAX_RESPAWNS:
-            log.error("El proceso de transcripción murió %d veces: descarto %d frases",
-                      self._deaths, len(self._pending))
-            self._pending.clear()
+            # El hijo transcribe en orden: la frase más antigua pendiente es la que lo tumba.
+            sid = next(iter(self._pending), None)
+            if sid is not None:
+                del self._pending[sid]
+            log.error("El proceso de transcripción murió %d veces con la misma frase: la descarto",
+                      self._deaths)
             self._deaths = 0
-            return
+            if not (self._pending or self._busy()):
+                return
         log.warning("El proceso de transcripción terminó; relanzando (%d)", self._deaths)
         self._spawn()
 
@@ -287,8 +309,8 @@ class RemoteTranscriber:
                     self._on_ready(*msg[1:])
                 elif kind == "error":
                     self._error = msg[1]
-                    self._state, self._proc, self._conn = "down", None, None
                     self._gen += 1
+                    self._drop_child()
                     if self._watcher is not None and self._pending:
                         log.error("No se pudo recargar el modelo (%s): descarto %d frases",
                                   msg[1], len(self._pending))
@@ -297,6 +319,7 @@ class RemoteTranscriber:
                     return
                 elif kind == "result":
                     item = self._pending.get(msg[1])
+                    self._deaths = 0  # el hijo contesta: las muertes anteriores no cuentan
                     self._last_used = time.monotonic()
                     if item is not None and msg[2]:
                         callback = (item[1], item[0], msg[2])

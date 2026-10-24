@@ -177,3 +177,26 @@ def test_selftest_roundtrip_spawns_real_child():
     from calltx.asr_remote import selftest_roundtrip
 
     assert selftest_roundtrip() == "ok"
+
+
+def test_segment_that_always_kills_child_is_dropped(remote):
+    t = remote()
+    t.start()
+    c = Collector()
+    t.submit(seg(0.95), c)
+    t.submit(seg(0.7), c)
+    assert t.wait_idle(60)
+    assert c.results == ["adiós"]
+
+
+def test_many_large_segments_queued_while_down_do_not_deadlock(remote):
+    t = remote(idle_s=0.2)
+    t.start()
+    assert wait_for(lambda: not t.loaded, 10)
+    c = Collector()
+    for _ in range(60):
+        s = seg(0.4)
+        s.audio = np.concatenate([s.audio, np.zeros(16000 * 2, np.float32)])  # ~130 KB por frase
+        t.submit(s, c)
+    assert t.wait_idle(60)
+    assert len(c.results) == 60
