@@ -105,7 +105,8 @@ function renderList(animate = false) {
   rows.forEach((b) => b.addEventListener("click", () => select(b.dataset.id)));
   if (animate === "stagger") {
     const step = ms("--stagger-step");
-    rows.slice(0, 8).forEach((b, i) => enter(b, { delay: i * step }));
+    // Las 8 primeras en cascada; el resto entra con la última, para no aparecer antes que las de arriba.
+    rows.forEach((b, i) => enter(b, { delay: Math.min(i, 7) * step }));
   } else if (animate === "new" && before.size) {
     rows.filter((b) => !before.has(b.dataset.id)).forEach((b) => enter(b));
   }
@@ -162,6 +163,7 @@ function lineHtml(l, fresh = false) {
 async function remove(id) {
   const res = await api().delete(id);
   if (!res.ok) { toast(esc(res.error)); return; }
+  listGen++;  // una carga lanzada antes del borrado traería de vuelta la fila
   await leave($(`.item[data-id="${CSS.escape(id)}"]`));
   await loadList(false);
   const t = toast(`Grabación borrada <button id="undo">Deshacer</button>`, 5000);
