@@ -52,6 +52,39 @@ def _font(px: int) -> ImageFont.FreeTypeFont:
     return _font_cache[px]
 
 
+ENTER_S = 0.18  # aparece: fundido + sube un poco
+EXIT_S = 0.12  # desaparece: fundido, más corto que la entrada
+RISE_PX = 8
+SPI_GETCLIENTAREAANIMATION = 0x1042
+
+
+def enter_frame(t: float) -> tuple[int, int]:
+    """(opacidad 0-255, desplazamiento hacia abajo en px) a los t segundos de aparecer."""
+    if t >= ENTER_S:
+        return 255, 0
+    k = max(0.0, t) / ENTER_S
+    e = 1 - (1 - k) ** 3  # ease-out
+    return round(255 * e), round(RISE_PX * (1 - e))
+
+
+def exit_alpha(t: float) -> int:
+    """Opacidad a los t segundos de empezar a desaparecer (ease-in)."""
+    if t >= EXIT_S:
+        return 0
+    k = max(0.0, t) / EXIT_S
+    return round(255 * (1 - k * k))
+
+
+def animations_enabled() -> bool:
+    """Ajuste de Windows "Efectos de animación"."""
+    try:
+        v = ctypes.c_int(1)
+        ctypes.windll.user32.SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, ctypes.byref(v), 0)
+        return bool(v.value)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _fmt(elapsed_s: float) -> str:
     s = max(0, int(elapsed_s))
     return f"{s // 60:02d}:{s % 60:02d}" if s < 3600 else f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}"
@@ -184,7 +217,6 @@ def _wndproc(hwnd, msg, wp, lp):
 class Indicator:
     FPS = 30
     DONE_S = 1.5
-    FADE_S = 0.18
 
     def __init__(self):
         self._cmds: queue.Queue = queue.Queue()
@@ -236,6 +268,9 @@ class Indicator:
         state: str | None = None
         started = 0.0
         done_at = 0.0
+        shown_at = 0.0  # cuándo apareció (animación de entrada)
+        leaving_at: float | None = None  # cuándo empezó a desaparecer (animación de salida)
+        animate = True
         visible = False
         msg = wintypes.MSG()
         last = time.monotonic()
@@ -253,23 +288,35 @@ class Indicator:
                         _user32.DestroyWindow(self._hwnd)
                         return
                     if cmd == "hide":
-                        state = None
-                    else:
-                        if cmd == "recording":
-                            started = now
-                            self._levels.extend([0.0] * 6)
-                        if cmd in ("copied", "saved"):
-                            done_at = now
-                        state = cmd
+                        if visible and state is not None and leaving_at is None:
+                            leaving_at = now  # se va desvaneciendo con lo último que mostraba
+                        elif not visible:
+                            state = None
+                        continue
+                    leaving_at = None
+                    if cmd == "recording":
+                        started = now
+                        self._levels.extend([0.0] * 6)
+                        if not visible:
+                            shown_at = now
+                    if cmd in ("copied", "saved"):
+                        done_at = now
+                    state = cmd
             except queue.Empty:
                 pass
-            alpha = 255
-            if state in ("copied", "saved"):
-                t = now - done_at
-                if t > self.DONE_S + self.FADE_S:
-                    state = None
-                elif t > self.DONE_S:
-                    alpha = int(255 * (1 - (t - self.DONE_S) / self.FADE_S))
+            if state in ("copied", "saved") and leaving_at is None and now - done_at > self.DONE_S:
+                leaving_at = done_at + self.DONE_S
+            alpha, dy = 255, 0
+            if state is not None and not visible:
+                if now - shown_at > ENTER_S:
+                    shown_at = now
+                animate = animations_enabled()
+            if animate:
+                alpha, dy = enter_frame(now - shown_at)
+                if leaving_at is not None:
+                    alpha = min(alpha, exit_alpha(now - leaving_at))
+            if leaving_at is not None and (not animate or now - leaving_at >= EXIT_S):
+                state, leaving_at = None, None
             if state is None:
                 if visible:
                     _user32.ShowWindow(self._hwnd, SW_HIDE)
@@ -280,7 +327,7 @@ class Indicator:
             self._shown = [max(t, s - dt / 0.12) for t, s in zip(target, self._shown)]
             try:
                 img = render_pill(state, self._shown, now - started, self._scale, spin=now * 1.2)
-                self._blit(img, alpha)
+                self._blit(img, alpha, round(dy * self._scale))
             except Exception:  # noqa: BLE001 - un fotograma fallido no apaga el indicador
                 log.exception("Error dibujando el indicador")
                 continue
@@ -289,12 +336,12 @@ class Indicator:
                 _user32.SetWindowPos(self._hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE)
                 visible = True
 
-    def _blit(self, img: Image.Image, alpha: int) -> None:
+    def _blit(self, img: Image.Image, alpha: int, dy: int = 0) -> None:
         w, h = img.size
         rect = wintypes.RECT()
         _user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0)
         x = (rect.left + rect.right - w) // 2
-        y = rect.bottom - h - round(16 * self._scale)
+        y = rect.bottom - h - round(16 * self._scale) + dy
         # BGRA premultiplicado, de arriba abajo
         r, g, b, a = img.split()
         premul = Image.merge("RGBA", [ImageChops.multiply(c, a) for c in (b, g, r)] + [a])

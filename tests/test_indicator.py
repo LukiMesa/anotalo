@@ -40,3 +40,19 @@ def test_win32_calls_declare_64bit_safe_types():
                m._user32.ShowWindow, m._user32.SetWindowPos, m._user32.CreateWindowExW, m._user32.DestroyWindow,
                m._user32.RegisterClassW, m._kernel32.GetModuleHandleW]:
         assert fn.argtypes is not None, fn.__name__
+
+
+def test_enter_frame_eases_in_and_settles():
+    from calltx.ui.indicator import ENTER_S, RISE_PX, enter_frame
+
+    a0, y0 = enter_frame(0)
+    assert a0 == 0 and y0 == RISE_PX
+    am, ym = enter_frame(ENTER_S / 2)
+    assert am > 127 and ym < RISE_PX / 2  # ease-out: más de la mitad hecho a mitad de tiempo
+    assert enter_frame(ENTER_S) == (255, 0) and enter_frame(5) == (255, 0)
+
+
+def test_exit_alpha():
+    from calltx.ui.indicator import EXIT_S, exit_alpha
+
+    assert exit_alpha(0) == 255 and exit_alpha(EXIT_S) == 0 and 0 < exit_alpha(EXIT_S / 2) < 255
