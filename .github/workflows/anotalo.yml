@@ -108,6 +108,9 @@ jobs:
           $out
           if ($LASTEXITCODE -ne 0) { throw "selftest terminó con $LASTEXITCODE" }
           if ($out -notmatch "ask not what your country") { throw "la transcripción no es la esperada" }
+          # Un whisper.cpp sin optimizar tardaba ~20 s aquí; optimizado, unos pocos segundos.
+          if ($out -notmatch "Tiempo: ([0-9.]+) s") { throw "falta la línea Tiempo" }
+          if ([double]$matches[1] -gt 8) { throw "selftest demasiado lento ($($matches[1]) s): ¿whisper.cpp sin optimizar?" }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -119,21 +122,33 @@ jobs:
   no-vulkan-smoke:
     needs: build
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: anotalo-exe
           path: dist
 
-      - name: Arranca sin Vulkan
+      - name: Modelo y audio de prueba
         shell: pwsh
         run: |
-          if (Test-Path "C:\Windows\System32\vulkan-1.dll") {
-            Write-Output "::warning::este runner trae vulkan-1.dll; prueba sin Vulkan omitida (se fuerza ANOTALO_NO_VULKAN=1)"
-            $env:ANOTALO_NO_VULKAN = "1"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -OutFile dist\ggml-tiny.bin
+          Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/samples/jfk.wav" -OutFile dist\jfk.wav
+
+      - name: Arranca y transcribe sin Vulkan
+        shell: pwsh
+        run: |
+          # El runner trae vulkan-1.dll: se quita de verdad (la máquina es desechable) para probar
+          # el camino real de un PC sin driver de GPU.
+          $dll = "C:\Windows\System32\vulkan-1.dll"
+          if (Test-Path $dll) {
+            takeown /f $dll | Out-Null
+            icacls $dll /grant "*S-1-5-32-544:F" | Out-Null
+            Remove-Item -Force $dll
           }
-          $out = & dist\anotalo.exe selftest | Out-String
+          if (Test-Path $dll) { throw "no se pudo quitar vulkan-1.dll" }
+          $out = & dist\anotalo.exe selftest --model dist\ggml-tiny.bin --wav dist\jfk.wav | Out-String
           $out
           if ($LASTEXITCODE -ne 0) { throw "selftest terminó con $LASTEXITCODE" }
           if ($out -notmatch "Vulkan: no disponible") { throw "esperaba 'Vulkan: no disponible'" }
+          if ($out -notmatch "ask not what your country") { throw "la transcripción no es la esperada" }

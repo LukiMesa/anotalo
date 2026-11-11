@@ -86,7 +86,7 @@ La versión sale de `calltx/__init__.py`. Requiere Inno Setup 6 (`winget install
 
 ## Code signing policy
 
-Free code signing provided by SignPath.io, certificate by SignPath Foundation
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org)
 
 Las versiones firmadas serán las de **Anotalo**, la reescritura de esta app que está en marcha, compiladas en GitHub Actions a partir de este repositorio.
 

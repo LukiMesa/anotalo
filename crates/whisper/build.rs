@@ -7,7 +7,7 @@ use std::process::Command;
 use std::{env, fs};
 
 /// Cambia este valor si cambia el parche: obliga a copiar y parchear de nuevo.
-const PATCH_STAMP: &str = "anotalo-vulkan-guard-3";
+const PATCH_STAMP: &str = "anotalo-vulkan-guard-4";
 
 const SKIP_TOP: &[&str] = &[".git", "models", "samples", "examples"];
 
@@ -52,11 +52,18 @@ fn main() {
     }
 
     // 4. CMake (el de Visual Studio si no hay uno en el PATH).
+    // cmake-rs sobrescribe las banderas de CMake con las suyas (sin /O2, sin NDEBUG ni /EHsc):
+    // whisper.cpp quedaba sin optimizar. Se fijan aquí; el CRT estático va por
+    // CMAKE_MSVC_RUNTIME_LIBRARY. Lo comprueba tests/build_flags.rs.
     ensure_cmake();
     cmake::Config::new(&src)
         .out_dir(&wcpp)
         .profile("Release")
         .static_crt(true)
+        .define("CMAKE_C_FLAGS", "/DWIN32 /D_WINDOWS")
+        .define("CMAKE_CXX_FLAGS", "/DWIN32 /D_WINDOWS /EHsc")
+        .define("CMAKE_C_FLAGS_RELEASE", "/O2 /Ob2 /DNDEBUG")
+        .define("CMAKE_CXX_FLAGS_RELEASE", "/O2 /Ob2 /DNDEBUG")
         .define("CMAKE_POLICY_DEFAULT_CMP0091", "NEW")
         .define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded")
         .define("BUILD_SHARED_LIBS", "OFF")
@@ -90,17 +97,21 @@ fn main() {
     println!("cargo:rustc-link-lib=advapi32"); // ggml-cpu lee el nombre del procesador del registro
     println!("cargo:rustc-link-arg-tests=/DELAYLOAD:vulkan-1.dll");
 
-    // 6. El puente en C.
+    // 6. El puente (C++ para atrapar las excepciones de whisper.cpp antes de llegar a Rust).
     cc::Build::new()
-        .file(manifest.join("shim").join("anotalo_whisper.c"))
+        .cpp(true)
+        .file(manifest.join("shim").join("anotalo_whisper.cpp"))
         .include(src.join("include"))
         .include(src.join("ggml").join("include"))
         .static_crt(true)
+        .flag("/EHsc")
+        .flag("/O2")
+        .define("NDEBUG", None)
         .compile("anotalo_whisper_shim");
 
     // 7. Cuándo volver a compilar.
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=shim/anotalo_whisper.c");
+    println!("cargo:rerun-if-changed=shim/anotalo_whisper.cpp");
     println!("cargo:rerun-if-changed=shim/anotalo_whisper.h");
     let module_head = root
         .join(".git")
@@ -174,7 +185,8 @@ fn patch_vulkan_guard(file: &Path) {
 static bool anotalo_vulkan_loader_available() {
 #ifdef _WIN32
     if (GetEnvironmentVariableW(L"ANOTALO_NO_VULKAN", nullptr, 0) > 0) { return false; }
-    return LoadLibraryW(L"vulkan-1.dll") != nullptr;
+    // Solo la de System32: una vulkan-1.dll junto al exe o en el PATH no se carga nunca.
+    return LoadLibraryExW(L"vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32) != nullptr;
 #else
     return true;
 #endif

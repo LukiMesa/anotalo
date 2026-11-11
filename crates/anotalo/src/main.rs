@@ -79,6 +79,10 @@ fn read_wav(path: &Path) -> Result<Vec<f32>, String> {
 /// modelo y un audio, una transcripción.
 fn selftest(model: Option<&Path>, wav: Option<&Path>) -> Result<(), String> {
     println!("{}", version_line());
+    let missing = anotalo_whisper::missing_cpu_features();
+    if !missing.is_empty() {
+        return Err(anotalo_whisper::WhisperError::UnsupportedCpu(missing).to_string());
+    }
     let devs = devices();
     for d in &devs {
         println!("Dispositivo: {} ({})", d.description, kind_label(d.kind));

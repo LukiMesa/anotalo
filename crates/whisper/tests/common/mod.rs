@@ -28,3 +28,22 @@ pub fn jfk() -> Vec<f32> {
         .map(|s| s.unwrap() as f32 / 32768.0)
         .collect()
 }
+
+/// Ruta de un módulo ya cargado en este proceso (p. ej. "vulkan-1.dll"), o None.
+pub fn loaded_module_path(name: &str) -> Option<String> {
+    unsafe extern "system" {
+        fn GetModuleHandleW(name: *const u16) -> *mut std::ffi::c_void;
+        fn GetModuleFileNameW(module: *mut std::ffi::c_void, buf: *mut u16, size: u32) -> u32;
+    }
+    let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: cadena terminada en NUL y búfer del tamaño indicado.
+    unsafe {
+        let module = GetModuleHandleW(wide.as_ptr());
+        if module.is_null() {
+            return None;
+        }
+        let mut buf = [0u16; 1024];
+        let n = GetModuleFileNameW(module, buf.as_mut_ptr(), buf.len() as u32) as usize;
+        Some(String::from_utf16_lossy(&buf[..n]))
+    }
+}

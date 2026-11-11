@@ -68,6 +68,8 @@ pub struct Segment {
 pub enum WhisperError {
     Load(String),
     Transcribe(i32),
+    /// Al procesador le faltan instrucciones con las que está compilado el motor.
+    UnsupportedCpu(Vec<&'static str>),
 }
 
 impl fmt::Display for WhisperError {
@@ -75,6 +77,12 @@ impl fmt::Display for WhisperError {
         match self {
             WhisperError::Load(path) => write!(f, "no se pudo cargar el modelo {path}"),
             WhisperError::Transcribe(code) => write!(f, "la transcripción falló (código {code})"),
+            WhisperError::UnsupportedCpu(missing) => write!(
+                f,
+                "este procesador no tiene las instrucciones que necesita el motor de transcripción \
+                 ({}): hace falta uno con AVX2 (Intel desde 2013, AMD desde 2015)",
+                missing.join(", ")
+            ),
         }
     }
 }
@@ -89,8 +97,35 @@ fn c_text(p: *const c_char) -> String {
     unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
 }
 
+/// Instrucciones con las que se compila whisper.cpp (base AVX2: Intel desde 2013, AMD desde 2015).
+/// Sin ellas, la primera llamada a ggml cerraría el programa ("instrucción ilegal").
+pub const REQUIRED_CPU_FEATURES: &[&str] = &["avx", "avx2", "fma", "f16c", "bmi2"];
+
+fn missing_from(has: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    REQUIRED_CPU_FEATURES
+        .iter()
+        .copied()
+        .filter(|f| !has(f))
+        .collect()
+}
+
+/// Instrucciones que le faltan a este procesador (vacío: el motor puede funcionar).
+pub fn missing_cpu_features() -> Vec<&'static str> {
+    missing_from(|f| match f {
+        "avx" => std::arch::is_x86_feature_detected!("avx"),
+        "avx2" => std::arch::is_x86_feature_detected!("avx2"),
+        "fma" => std::arch::is_x86_feature_detected!("fma"),
+        "f16c" => std::arch::is_x86_feature_detected!("f16c"),
+        "bmi2" => std::arch::is_x86_feature_detected!("bmi2"),
+        _ => false,
+    })
+}
+
 /// Dispositivos disponibles (sin Vulkan, solo la CPU).
 pub fn devices() -> Vec<Device> {
+    if !missing_cpu_features().is_empty() {
+        return Vec::new(); // sin tocar ggml: en este procesador se cerraría
+    }
     // SAFETY: funciones sin estado de ggml; índices dentro de anotalo_device_count().
     unsafe {
         (0..anotalo_device_count())
@@ -133,6 +168,10 @@ extern "C" fn on_segment(
 
 impl Model {
     pub fn load(path: &Path, opts: &LoadOptions) -> Result<Model, WhisperError> {
+        let missing = missing_cpu_features();
+        if !missing.is_empty() {
+            return Err(WhisperError::UnsupportedCpu(missing));
+        }
         let shown = path.display().to_string();
         let c_path = path
             .to_str()
@@ -177,5 +216,20 @@ impl Drop for Model {
     fn drop(&mut self) {
         // SAFETY: contexto creado por anotalo_init y liberado una sola vez.
         unsafe { anotalo_free(self.ctx.as_ptr()) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reports_the_cpu_features_whisper_needs() {
+        assert!(super::missing_from(|_| true).is_empty());
+        assert_eq!(super::missing_from(|f| f != "avx2"), vec!["avx2"]);
+        assert_eq!(
+            super::missing_from(|_| false).len(),
+            super::REQUIRED_CPU_FEATURES.len()
+        );
+        // este PC (i7-9700) los tiene todos
+        assert!(super::missing_cpu_features().is_empty());
     }
 }

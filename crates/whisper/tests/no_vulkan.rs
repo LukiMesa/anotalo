@@ -34,4 +34,6 @@ fn without_the_vulkan_loader_it_runs_on_the_cpu() {
         .collect::<String>()
         .to_lowercase();
     assert!(text.contains("ask not what your country"), "{text}");
+    // Nada debe haber tocado Vulkan: si algo lo llama antes de la protección, la DLL estaría cargada.
+    assert_eq!(common::loaded_module_path("vulkan-1.dll"), None);
 }
