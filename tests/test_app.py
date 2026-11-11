@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from calltx.app import App
+from calltx.app import CALL_LABEL, App, OthersSpec
 from calltx.config import Settings
 from calltx.detector import Detected
 from calltx.platforms import PLATFORMS
@@ -41,8 +41,8 @@ class FakeDetector:
 
 
 class FakeSession:
-    def __init__(self, label, exe, text="texto de Yo"):
-        self.label, self.exe = label, exe
+    def __init__(self, label, others, text="texto de Yo"):
+        self.label, self.others = label, others
         self.started = self.stopped = False
         self._text = text
 
@@ -67,8 +67,8 @@ class Harness:
         self.copied = []
         self.ended = []
 
-        def sf(label, exe, on_line, on_level):
-            s = FakeSession(label, exe, text)
+        def sf(label, others, on_line, on_level):
+            s = FakeSession(label, others, text)
             self.sessions.append(s)
             return s
 
@@ -111,7 +111,7 @@ def test_auto_stop_ignores_manual_session():
 def test_auto_start_uses_teams_pid():
     h = Harness()
     h.det.on_start(TEAMS)
-    assert (h.sessions[0].label, h.sessions[0].exe) == ("Teams", "ms-teams.exe")
+    assert (h.sessions[0].label, h.sessions[0].others) == ("Teams", OthersSpec("process", "ms-teams.exe"))
     h.det.on_stop(TEAMS)
     assert h.sessions[0].stopped
 
@@ -119,7 +119,7 @@ def test_auto_start_uses_teams_pid():
 def test_meet_uses_firefox():
     h = Harness()
     h.det.on_start(MEET)
-    assert h.sessions[0].exe == "firefox.exe"
+    assert h.sessions[0].others == OthersSpec("process", "firefox.exe")
 
 
 def test_hotkey_stop_of_auto_session_dismisses():
@@ -214,7 +214,7 @@ def test_session_end_event():
 def test_manual_label_is_nota():
     h = Harness()
     h.app.toggle()
-    assert (h.sessions[0].label, h.sessions[0].exe) == ("Nota", None)
+    assert (h.sessions[0].label, h.sessions[0].others) == ("Nota", None)
 
 
 def test_apply_setting_rejected_while_recording():
@@ -325,3 +325,46 @@ def test_failed_model_retries_on_hotkey():
     h.app.toggle()
     assert h.sessions == [] and retries == [1]
     assert any("reintent" in (n[0] + n[1]).lower() for n in h.notes)
+
+
+def test_manual_call_uses_device_audio_and_call_label():
+    h = Harness()
+    h.app.start_call_manual()
+    s = h.sessions[0]
+    assert s.started and s.label == CALL_LABEL == "Llamada"
+    assert s.others == OthersSpec("device")
+    assert h.app.session_kind == "manual"
+
+
+def test_manual_call_suspends_detector_and_hotkey_stops_it():
+    h = Harness(text="hola")
+    h.app.start_call_manual()
+    assert h.det.suspended
+    h.app.toggle()  # el atajo de notas para la llamada
+    assert h.sessions[0].stopped and h.copied == []  # las llamadas nunca se copian
+    assert h.app.session_kind is None and not h.det.suspended
+
+
+def test_manual_call_not_started_while_recording():
+    h = Harness()
+    h.app.toggle()  # nota rápida en curso
+    h.app.start_call_manual()
+    assert len(h.sessions) == 1 and h.app.session_kind == "note"
+
+
+def test_toggle_call_starts_and_stops():
+    h = Harness()
+    h.app.toggle_call()
+    assert h.app.session_kind == "manual"
+    h.app.toggle_call()
+    assert h.sessions[0].stopped and h.app.session_kind is None
+
+
+def test_detected_platform_label_and_audio():
+    h = Harness()
+    h.det.on_start(det("whatsapp"))
+    assert (h.sessions[0].label, h.sessions[0].others) == ("WhatsApp", OthersSpec("device"))
+    assert h.app.session_kind == "call"
+    h.det.on_stop(det("whatsapp"))
+    h.det.on_start(det("zoom"))
+    assert h.sessions[1].others == OthersSpec("process", "zoom.exe")

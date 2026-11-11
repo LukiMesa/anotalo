@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -14,6 +15,15 @@ log = logging.getLogger(__name__)
 
 State = Literal["idle", "armed", "recording", "preparing"]
 NOTE_LABEL = "Nota"
+CALL_LABEL = "Llamada"  # llamada grabada a mano ("Manual" ya es una etiqueta de nota antigua)
+
+
+@dataclass(frozen=True)
+class OthersSpec:
+    """De dónde sale la voz de los demás: el audio de un programa o todo lo que suena en el equipo."""
+
+    kind: Literal["process", "device"]
+    exe: str | None = None
 
 
 class App:
@@ -21,7 +31,7 @@ class App:
         self,
         settings: Settings,
         detector_factory: Callable,
-        session_factory: Callable,  # (label, exe|None, on_line, on_level) -> session
+        session_factory: Callable,  # (label, OthersSpec|None, on_line, on_level) -> session; None = nota
         notifier: Callable[..., None],
         wait_ready: Callable[[float], bool] | None = None,
         copy_text: Callable[[str], None] = lambda text: None,
@@ -34,6 +44,7 @@ class App:
         self._lock = threading.RLock()
         self._session = None
         self._session_auto = False
+        self._others: OthersSpec | None = None
         self.on_state_change: list[Callable[[State], None]] = []
         self.on_line: list[Callable[[str, str, float, str], None]] = []
         self.on_session_start: list[Callable[[str], None]] = []
@@ -72,6 +83,14 @@ class App:
     @property
     def session(self):
         return self._session
+
+    @property
+    def session_kind(self) -> Literal["note", "call", "manual"] | None:
+        if self._session is None:
+            return None
+        if self._others is None:
+            return "note"
+        return "call" if self._session_auto else "manual"
 
     def _changed(self) -> None:
         for cb in list(self.on_state_change):
@@ -136,6 +155,22 @@ class App:
                 return
             self._begin(NOTE_LABEL, None, auto=False)
 
+    def start_call_manual(self) -> None:
+        """Grabar llamada a mano: micrófono + todo lo que suena en el equipo (con auriculares)."""
+        if self._stopping or not self._model_ready():
+            return
+        with self._lock:
+            if self._session is not None or self._stopping:
+                return
+            self._begin(CALL_LABEL, OthersSpec("device"), auto=False)
+
+    def toggle_call(self) -> None:
+        with self._lock:
+            if self._session is not None:
+                self._stop_session(user=True)
+                return
+        self.start_call_manual()
+
     def set_auto(self, enabled: bool) -> None:
         with self._lock:
             self.settings.auto_mode = enabled
@@ -148,7 +183,9 @@ class App:
         with self._lock:
             if self._session is not None or self._stopping:
                 return
-            self._begin(detected.label, detected.exe, auto=True)
+            others = (OthersSpec("device") if detected.platform.audio == "device"
+                      else OthersSpec("process", detected.exe))
+            self._begin(detected.label, others, auto=True)
 
     def on_call_stop(self, detected: Detected) -> None:
         with self._lock:
@@ -156,15 +193,15 @@ class App:
                 self._stop_session(user=False)
 
     # --- interno -----------------------------------------------------------
-    def _begin(self, label: str, exe: str | None, auto: bool) -> None:
+    def _begin(self, label: str, others: OthersSpec | None, auto: bool) -> None:
         try:
-            session = self._session_factory(label, exe, self._emit_line, self._emit_level)
+            session = self._session_factory(label, others, self._emit_line, self._emit_level)
             session.start()
         except Exception as e:  # noqa: BLE001
             log.exception("No se pudo iniciar la grabación")
             self._notify("Error al grabar", str(e))
             return
-        self._session, self._session_auto, self._label = session, auto, label
+        self._session, self._session_auto, self._label, self._others = session, auto, label, others
         self._sync_detector()
         for cb in list(self.on_session_start):
             cb(label)
@@ -174,7 +211,7 @@ class App:
 
     def _stop_session(self, user: bool) -> None:
         session, was_auto, label = self._session, self._session_auto, self._label
-        self._session, self._session_auto, self._label = None, False, None
+        self._session, self._session_auto, self._label, self._others = None, False, None, None
         self.busy = True
         path, copied = None, False
         for cb in list(self.on_session_stopping):

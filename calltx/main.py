@@ -144,7 +144,7 @@ def main() -> int:
 
     from . import autostart
     from .asr_remote import RemoteTranscriber
-    from .audio.sources import MicSource, find_root_pid, open_call_audio
+    from .audio.sources import DefaultLoopbackSource, MicSource, find_root_pid, open_call_audio
     from .clipboard import set_text as copy_text
     from .detector import CallDetector
     from .hotkey import GlobalHotkey, HotkeyError, validate_hotkey
@@ -264,18 +264,22 @@ def main() -> int:
             return f"GPU · {gpu['name'] or 'NVIDIA'} · {t.model_name}{rest}"
         return f"Procesador{' (respaldo)' if t.fallback_used else ''} · {t.model_name}{rest}"
 
-    def session_factory(label: str, exe: str | None, on_line, on_level=None):
+    def session_factory(label: str, others_spec, on_line, on_level=None):
+        """others_spec: None = nota rápida (solo micro); OthersSpec("process", exe) = audio de ese
+        programa; OthersSpec("device") = todo lo que suena en el equipo."""
         models.current.warm()  # el modelo carga mientras ya se graba
         mic = MicSource(settings.mic_device)
-        if exe is None:
+        if others_spec is None:
             log.info("Nota rápida: solo micrófono")
             return CallSession(settings, models.current, label, mic, None, on_line=on_line, on_level=on_level)
 
         def make_others():
-            return open_call_audio(find_root_pid(exe))
+            if others_spec.kind == "device":
+                return DefaultLoopbackSource()
+            return open_call_audio(find_root_pid(others_spec.exe))
 
         others = make_others()
-        log.info("Sesión %s: audio de la llamada desde %s", label, others.name)
+        log.info("Sesión %s: audio de los demás desde %s", label, others.name)
         return CallSession(settings, models.current, label, mic, others,
                            on_line=on_line, others_factory=make_others, on_level=on_level)
 
