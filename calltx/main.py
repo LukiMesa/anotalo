@@ -427,6 +427,9 @@ def main() -> int:
         log.info("Transcriptor iniciado (atajo %s, modo automático %s)", settings.hotkey, settings.auto_mode)
 
     storage = cfg_path.parent / "webview"
+    from .ui.window import clear_web_cache
+
+    clear_web_cache(storage)  # si no, tras actualizar se vería la interfaz antigua
     from .paths import assets_dir, http_port
 
     webview.start(bootstrap, gui="edgechromium", private_mode=False, storage_path=str(storage),

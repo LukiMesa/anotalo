@@ -40,6 +40,17 @@ def enable_native_drag_regions() -> None:
     edgechromium.EdgeChrome._calltx_patched = True
 
 
+def clear_web_cache(storage: Path) -> None:
+    """Vacía la caché HTTP del navegador de la ventana. El servidor local de pywebview no manda
+    cabeceras de no-caché, así que tras actualizar la app el navegador seguía mostrando la
+    interfaz antigua. La página se sirve en local: vaciarla en cada arranque no cuesta nada."""
+    import shutil
+
+    default = Path(storage) / "EBWebView" / "Default"
+    for name in ("Cache", "Code Cache"):
+        shutil.rmtree(default / name, ignore_errors=True)
+
+
 RESIZE_BORDER = 5
 
 

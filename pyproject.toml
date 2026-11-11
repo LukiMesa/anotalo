@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "calltx"
-version = "0.6.0"
+version = "0.6.1"
 description = "Transcriptor local de llamadas (Teams / Meet) con faster-whisper"
 requires-python = ">=3.12"
 license = { text = "MIT" }
