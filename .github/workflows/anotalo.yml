@@ -1,0 +1,139 @@
+# Anotalo (Rust): compila, prueba y comprueba anotalo.exe en Windows. Sube el exe sin firmar.
+# La firma con SignPath llega en M5, en este mismo workflow.
+name: Anotalo
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v[1-9]*"]
+    paths:
+      - "crates/**"
+      - "third_party/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - "scripts/check-deps.ps1"
+      - "scripts/get-test-model.ps1"
+      - ".github/workflows/anotalo.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "third_party/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - "scripts/check-deps.ps1"
+      - "scripts/get-test-model.ps1"
+      - ".github/workflows/anotalo.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: anotalo-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VULKAN_VERSION: "1.4.363.0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Instalador del Vulkan SDK (caché)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\vulkan
+          key: vulkan-sdk-${{ env.VULKAN_VERSION }}
+
+      - name: Instalar el Vulkan SDK
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "vulkan"
+          $exe = Join-Path $dir "vulkan_sdk.exe"
+          if (-not (Test-Path $exe)) {
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            Invoke-WebRequest -UseBasicParsing -Uri "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkan_sdk.exe" -OutFile $exe
+          }
+          $root = "C:\VulkanSDK\$env:VULKAN_VERSION"
+          $p = Start-Process $exe -ArgumentList "--root", $root, "--accept-licenses", "--default-answer", "--confirm-command", "install" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "El instalador del Vulkan SDK terminó con $($p.ExitCode)" }
+          "VULKAN_SDK=$root" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "$root\Bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Rust (versión de rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Modelo de prueba (caché)
+        uses: actions/cache@v4
+        with:
+          path: target\models\ggml-tiny.bin
+          key: ggml-tiny-v1
+
+      - name: Descargar el modelo de prueba
+        shell: pwsh
+        run: .\scripts\get-test-model.ps1
+
+      - name: Formato
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --release --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --release --workspace
+
+      - name: Compilar
+        run: cargo build --release
+
+      - name: Dependencias del exe (CRT estático, Vulkan diferido)
+        shell: pwsh
+        run: .\scripts\check-deps.ps1 -Exe target\release\anotalo.exe
+
+      - name: Autodiagnóstico (sin GPU en el runner)
+        shell: pwsh
+        run: |
+          $out = & target\release\anotalo.exe selftest --model target\models\ggml-tiny.bin --wav third_party\whisper.cpp\samples\jfk.wav | Out-String
+          $out
+          if ($LASTEXITCODE -ne 0) { throw "selftest terminó con $LASTEXITCODE" }
+          if ($out -notmatch "ask not what your country") { throw "la transcripción no es la esperada" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anotalo-exe
+          path: target\release\anotalo.exe
+          retention-days: 14
+          if-no-files-found: error
+
+  no-vulkan-smoke:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: anotalo-exe
+          path: dist
+
+      - name: Arranca sin Vulkan
+        shell: pwsh
+        run: |
+          if (Test-Path "C:\Windows\System32\vulkan-1.dll") {
+            Write-Output "::warning::este runner trae vulkan-1.dll; prueba sin Vulkan omitida (se fuerza ANOTALO_NO_VULKAN=1)"
+            $env:ANOTALO_NO_VULKAN = "1"
+          }
+          $out = & dist\anotalo.exe selftest | Out-String
+          $out
+          if ($LASTEXITCODE -ne 0) { throw "selftest terminó con $LASTEXITCODE" }
+          if ($out -notmatch "Vulkan: no disponible") { throw "esperaba 'Vulkan: no disponible'" }
