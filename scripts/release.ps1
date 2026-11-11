@@ -1,4 +1,4 @@
-﻿# Publica el instalador como Release en GitHub (repositorio privado).
+﻿# Publica el instalador como Release en GitHub (repositorio público; las apps instaladas la ven al momento).
 # Uso: .\scripts\release.ps1   (antes: .\scripts\build.ps1)
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
