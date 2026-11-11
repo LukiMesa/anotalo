@@ -146,7 +146,7 @@ def main() -> int:
     from .asr_remote import RemoteTranscriber
     from .audio.sources import MicSource, find_root_pid, open_call_audio
     from .clipboard import set_text as copy_text
-    from .detector import CallApp, CallDetector
+    from .detector import CallDetector
     from .hotkey import GlobalHotkey, HotkeyError, validate_hotkey
     from .library import Trash
     from .session import CallSession
@@ -282,7 +282,7 @@ def main() -> int:
     def detector_factory(on_start, on_stop):
         return CallDetector(
             on_start, on_stop,
-            enabled=lambda a: settings.detect_teams if a is CallApp.TEAMS else settings.detect_meet,
+            enabled=lambda p: bool(getattr(settings, p.setting, False)),
         )
 
     app = App(settings, detector_factory, session_factory, _notifier,

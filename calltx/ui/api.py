@@ -21,7 +21,8 @@ log = logging.getLogger(__name__)
 
 MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
 EDITABLE = {
-    "copy_on_stop", "show_indicator", "autostart", "auto_mode", "detect_teams", "detect_meet",
+    "copy_on_stop", "show_indicator", "autostart", "auto_mode", "detect_teams", "detect_zoom", "detect_whatsapp", "detect_slack", "detect_discord",
+    "detect_browsers",
     "label_me", "label_others", "model", "language", "output_dir", "hotkey", "release_after_min",
 }
 RELEASE_OPTIONS = {0, 2, 10, 30}  # minutos; 0 = nunca

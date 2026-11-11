@@ -1,29 +1,26 @@
-"""Detección de llamadas de Teams / Google Meet (Firefox).
+r"""Detección de llamadas en Teams, Zoom, WhatsApp, Slack, Discord y navegadores.
 
 Windows registra qué apps usan el micrófono en
-HKCU\\...\\CapabilityAccessManager\\ConsentStore\\microphone: mientras una app lo
-usa, su LastUsedTimeStop vale 0. Una llamada empieza cuando Teams usa el micro,
-o cuando Firefox lo usa y hay una ventana de Meet. Termina SOLO cuando esa app
-suelta el micro (cambiar de pestaña o de app no corta la grabación).
+HKCU\...\CapabilityAccessManager\ConsentStore\microphone: mientras una app lo
+usa, su LastUsedTimeStop vale 0. Una llamada empieza cuando una de las apps de
+calltx/platforms.py usa el micro unos segundos (y, si hace falta, hay señales de llamada,
+p. ej. WhatsApp con notas de voz). Termina SOLO cuando esa app suelta el micro (cambiar
+de pestaña o de app no corta la grabación).
 """
 
 from __future__ import annotations
 
-import enum
 import logging
-import re
 import threading
 import time
+from dataclasses import dataclass
 from typing import Callable
+
+from .platforms import PLATFORMS, Platform, platform_for_key, site_from_title
 
 log = logging.getLogger(__name__)
 
 CONSENT_KEY = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
-
-
-class CallApp(enum.Enum):
-    TEAMS = "Teams"
-    MEET = "Meet"
 
 
 def _read_consent_store() -> dict[str, tuple[int, int]]:
@@ -64,79 +61,76 @@ def mic_in_use(reader: Callable[[], dict[str, tuple[int, int]]] = _read_consent_
     return {k for k, (start, stop) in entries.items() if start > 0 and stop == 0}
 
 
-def _is_teams(key: str) -> bool:
-    k = key.lower()
-    return k.startswith("msteams_") or k.endswith("#ms-teams.exe") or k.endswith("#teams.exe")
+@dataclass(frozen=True)
+class Detected:
+    platform: Platform
+    label: str  # "Teams", "Meet", "Chrome"…
+    exe: str | None  # proceso cuyo audio es "los demás" (si platform.audio == "process")
 
 
-def _is_firefox(key: str) -> bool:
-    return key.lower().endswith("#firefox.exe")
+def platforms_in_use(keys: set[str]) -> set[str]:
+    return {p.key for k in keys if (p := platform_for_key(k)) is not None}
 
 
-_MEET_TITLE = re.compile(r"^Meet\s*[-–—:]|Google Meet")
-
-
-def is_meet_title(title: str) -> bool:
-    return bool(_MEET_TITLE.search(title))
-
-
-def firefox_meet_window_open() -> bool:
+def window_site(platform: Platform) -> str | None:
+    """Plataforma reconocible en las ventanas visibles de ese programa (p. ej. "Meet")."""
     import ctypes
     from ctypes import wintypes
 
     import psutil
 
     user32 = ctypes.windll.user32
-    found = False
-    firefox_pids = {p.pid for p in psutil.process_iter(["name"]) if (p.info["name"] or "").lower() == "firefox.exe"}
-    if not firefox_pids:
-        return False
+    pids = {p.pid for p in psutil.process_iter(["name"]) if (p.info["name"] or "").lower() in platform.exes}
+    if not pids:
+        return None
+    found: list[str] = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def cb(hwnd, _):
-        nonlocal found
         if not user32.IsWindowVisible(hwnd):
             return True
         pid = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if pid.value not in firefox_pids:
+        if pid.value not in pids:
             return True
         n = user32.GetWindowTextLengthW(hwnd)
         buf = ctypes.create_unicode_buffer(n + 1)
         user32.GetWindowTextW(hwnd, buf, n + 1)
-        if is_meet_title(buf.value):
-            found = True
+        if site := site_from_title(buf.value):
+            found.append(site)
             return False
         return True
 
     user32.EnumWindows(cb, 0)
-    return found
+    return found[0] if found else None
 
 
 class CallDetector:
     def __init__(
         self,
-        on_start: Callable[[CallApp], None],
-        on_stop: Callable[[CallApp], None],
+        on_start: Callable[[Detected], None],
+        on_stop: Callable[[Detected], None],
         probe_mic: Callable[[], set[str]] = mic_in_use,
-        probe_meet: Callable[[], bool] = firefox_meet_window_open,
+        probe_title: Callable[[Platform], str | None] = window_site,
+        probe_call_evidence: Callable[[Platform], bool] = lambda p: True,
         clock: Callable[[], float] = time.monotonic,
         start_hold_s: float = 4.0,
         stop_grace_s: float = 10.0,
-        enabled: Callable[[CallApp], bool] = lambda app: True,
+        enabled: Callable[[Platform], bool] = lambda p: True,
     ):
         self._enabled = enabled
         self._on_start = on_start
         self._on_stop = on_stop
         self._probe_mic = probe_mic
-        self._probe_meet = probe_meet
+        self._probe_title = probe_title
+        self._probe_evidence = probe_call_evidence
         self._clock = clock
         self._hold = start_hold_s
         self._grace = stop_grace_s
         self._suspended = False
-        self._candidate: CallApp | None = None
+        self._candidate: Platform | None = None
         self._candidate_since = 0.0
-        self.active: CallApp | None = None
+        self.active: Detected | None = None
         self._released_since: float | None = None
         self._dismissed = False
         self._stop_evt = threading.Event()
@@ -149,32 +143,35 @@ class CallDetector:
     def resume(self) -> None:
         self._suspended = False
 
-    def _app_in_use(self, app: CallApp, keys: set[str]) -> bool:
-        check = _is_teams if app is CallApp.TEAMS else _is_firefox
-        return any(check(k) for k in keys)
+    def _label(self, platform: Platform) -> str:
+        if not platform.browser:
+            return platform.name
+        try:
+            return self._probe_title(platform) or platform.name
+        except Exception:  # noqa: BLE001 - el nombre es secundario
+            log.debug("No se pudo leer el título de %s", platform.name, exc_info=True)
+            return platform.name
 
     def tick(self) -> None:
         now = self._clock()
-        keys = self._probe_mic()
+        in_use = platforms_in_use(self._probe_mic())
         if self.active is not None:
-            if self._app_in_use(self.active, keys):
+            if self.active.platform.key in in_use:
                 self._released_since = None
             elif self._released_since is None:
                 self._released_since = now
             elif now - self._released_since >= self._grace:
-                app, self.active, self._released_since = self.active, None, None
+                det, self.active, self._released_since = self.active, None, None
                 dismissed, self._dismissed = self._dismissed, False
-                log.info("Fin de llamada %s", app.value)
+                log.info("Fin de llamada %s", det.label)
                 if not dismissed:
-                    self._on_stop(app)
+                    self._on_stop(det)
             return
         if self._suspended:
             return
-        cand: CallApp | None = None
-        if self._enabled(CallApp.TEAMS) and self._app_in_use(CallApp.TEAMS, keys):
-            cand = CallApp.TEAMS
-        elif self._enabled(CallApp.MEET) and self._app_in_use(CallApp.MEET, keys) and self._probe_meet():
-            cand = CallApp.MEET
+        cand = next((p for p in PLATFORMS
+                     if p.key in in_use and self._enabled(p)
+                     and (not p.needs_call_evidence or self._probe_evidence(p))), None)
         if cand is None:
             self._candidate = None
             return
@@ -183,9 +180,9 @@ class CallDetector:
             return
         if now - self._candidate_since >= self._hold:
             self._candidate = None
-            self.active = cand
-            log.info("Llamada detectada: %s", cand.value)
-            self._on_start(cand)
+            self.active = Detected(cand, self._label(cand), cand.exes[0] if cand.exes else None)
+            log.info("Llamada detectada: %s (%s)", self.active.label, cand.name)
+            self._on_start(self.active)
 
     def run(self, poll_s: float = 2.0) -> None:
         self._stop_evt.clear()

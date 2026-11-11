@@ -2,7 +2,19 @@ from pathlib import Path
 
 from calltx.app import App
 from calltx.config import Settings
-from calltx.detector import CallApp
+from calltx.detector import Detected
+from calltx.platforms import PLATFORMS
+
+_P = {p.key: p for p in PLATFORMS}
+
+
+def det(key, label=None):
+    p = _P[key]
+    return Detected(p, label or p.name, p.exes[0])
+
+
+TEAMS = det("teams")
+MEET = det("firefox", "Meet")
 
 
 class FakeDetector:
@@ -92,27 +104,27 @@ def test_manual_suspends_detector():
 def test_auto_stop_ignores_manual_session():
     h = Harness()
     h.app.toggle()
-    h.det.on_stop(CallApp.TEAMS)
+    h.det.on_stop(TEAMS)
     assert not h.sessions[0].stopped
 
 
 def test_auto_start_uses_teams_pid():
     h = Harness()
-    h.det.on_start(CallApp.TEAMS)
+    h.det.on_start(TEAMS)
     assert (h.sessions[0].label, h.sessions[0].exe) == ("Teams", "ms-teams.exe")
-    h.det.on_stop(CallApp.TEAMS)
+    h.det.on_stop(TEAMS)
     assert h.sessions[0].stopped
 
 
 def test_meet_uses_firefox():
     h = Harness()
-    h.det.on_start(CallApp.MEET)
+    h.det.on_start(MEET)
     assert h.sessions[0].exe == "firefox.exe"
 
 
 def test_hotkey_stop_of_auto_session_dismisses():
     h = Harness()
-    h.det.on_start(CallApp.TEAMS)
+    h.det.on_start(TEAMS)
     h.app.toggle()
     assert h.sessions[0].stopped
     assert h.det.dismissed == 1
@@ -150,7 +162,7 @@ def test_model_wait_does_not_hold_lock():
         return True
 
     h.app._wait_ready = ready
-    h.det.on_start(CallApp.TEAMS)
+    h.det.on_start(TEAMS)
     assert free == [True]
     assert h.sessions and h.sessions[0].started
 
@@ -158,7 +170,7 @@ def test_model_wait_does_not_hold_lock():
 def test_no_session_after_quit():
     h = Harness()
     h.app.quit()
-    h.det.on_start(CallApp.TEAMS)
+    h.det.on_start(TEAMS)
     h.app.toggle()
     assert h.sessions == []
 
@@ -172,7 +184,7 @@ def test_note_copied_on_stop():
 
 def test_call_not_copied():
     h = Harness()
-    h.det.on_start(CallApp.TEAMS)
+    h.det.on_start(TEAMS)
     h.app.toggle()
     assert h.copied == []
 
@@ -283,7 +295,7 @@ def test_toggle_while_preparing_notifies_no_session():
 def test_call_start_while_preparing_ignored():
     h = Harness()
     h.app.set_preparing((0.1, "Descargando"))
-    h.det.on_start(CallApp.TEAMS)
+    h.det.on_start(TEAMS)
     assert h.sessions == []
 
 

@@ -8,13 +8,12 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from .config import Settings
-from .detector import CallApp
+from .detector import Detected
 
 log = logging.getLogger(__name__)
 
 State = Literal["idle", "armed", "recording", "preparing"]
 NOTE_LABEL = "Nota"
-EXE_FOR_APP = {CallApp.TEAMS: "ms-teams.exe", CallApp.MEET: "firefox.exe"}
 
 
 class App:
@@ -143,15 +142,15 @@ class App:
             self._sync_detector()
         self._changed()
 
-    def on_call_start(self, app: CallApp) -> None:
+    def on_call_start(self, detected: Detected) -> None:
         if self._stopping or not self._model_ready():
             return
         with self._lock:
             if self._session is not None or self._stopping:
                 return
-            self._begin(app.value, EXE_FOR_APP[app], auto=True)
+            self._begin(detected.label, detected.exe, auto=True)
 
-    def on_call_stop(self, app: CallApp) -> None:
+    def on_call_stop(self, detected: Detected) -> None:
         with self._lock:
             if self._session is not None and self._session_auto:
                 self._stop_session(user=False)

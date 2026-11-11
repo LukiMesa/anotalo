@@ -42,7 +42,8 @@ def test_new_defaults():
     s = Settings()
     assert s.copy_on_stop is True and s.show_indicator is True
     assert s.autostart is True and s.autostart_configured is False
-    assert s.detect_teams is True and s.detect_meet is True
+    assert s.detect_teams is True and s.detect_browsers is True
+    assert s.detect_zoom and s.detect_whatsapp and s.detect_slack and s.detect_discord is False
 
 
 def test_defaults_auto():
@@ -59,3 +60,12 @@ def test_migrate_cuda_to_auto(tmp_path):
 
 def test_release_after_default_is_ten_minutes():
     assert Settings().release_after_min == 10
+
+
+def test_migrates_detect_meet_to_browsers(tmp_path):
+    import json
+
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"detect_meet": False, "detect_teams": True}), encoding="utf-8")
+    s = load_settings(p)
+    assert s.detect_browsers is False and s.detect_teams is True and s.detect_discord is False

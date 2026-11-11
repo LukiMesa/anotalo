@@ -38,7 +38,11 @@ class Settings:
     autostart: bool = True
     autostart_configured: bool = False
     detect_teams: bool = True
-    detect_meet: bool = True
+    detect_zoom: bool = True
+    detect_whatsapp: bool = True
+    detect_slack: bool = True
+    detect_discord: bool = False  # también se usa fuera de llamadas de trabajo: solo si se activa
+    detect_browsers: bool = True  # Firefox, Chrome, Brave, Edge, Opera, Vivaldi
     release_after_min: int = 10  # liberar el modelo tras N min sin grabar (0 = nunca)
 
 
@@ -61,6 +65,8 @@ def load_settings(path: Path | None = None) -> Settings:
         return Settings()
     if data.get("device") == "cuda":  # versiones anteriores: ahora se decide solo
         data["device"] = "auto"
+    if "detect_meet" in data and "detect_browsers" not in data:  # hasta 0.5: Meet solo en Firefox
+        data["detect_browsers"] = bool(data["detect_meet"])
     known = {f.name for f in fields(Settings)}
     return Settings(**{k: v for k, v in data.items() if k in known})
 

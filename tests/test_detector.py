@@ -1,22 +1,30 @@
-from calltx.detector import CallApp, CallDetector, mic_in_use
+from calltx.detector import CallDetector, mic_in_use
+from calltx.platforms import platform_for_key
 
 TEAMS = "MSTeams_8wekyb3d8bbwe"
 FIREFOX = "NonPackaged/C:#Program Files#Mozilla Firefox#firefox.exe"
+CHROME = "NonPackaged/C:#Program Files#Google#Chrome#Application#chrome.exe"
+DISCORD = "NonPackaged/C:#x#Discord#app-1.0.9#Discord.exe"
+WHATSAPP = "5319275A.WhatsAppDesktop_cv1g1gvanyjgm"
 
 
 class World:
     def __init__(self):
         self.t = 0.0
         self.mic: set[str] = set()
-        self.meet = False
-        self.events: list[tuple[str, CallApp]] = []
+        self.titles: dict[str, str | None] = {}  # clave de plataforma -> sitio reconocido
+        self.evidence = True
+        self.disabled: set[str] = set()
+        self.events: list[tuple[str, str]] = []  # (start|stop, etiqueta)
 
     def detector(self):
         return CallDetector(
-            on_start=lambda a: self.events.append(("start", a)),
-            on_stop=lambda a: self.events.append(("stop", a)),
+            on_start=lambda d: self.events.append(("start", d.label)),
+            on_stop=lambda d: self.events.append(("stop", d.label)),
             probe_mic=lambda: set(self.mic),
-            probe_meet=lambda: self.meet,
+            probe_title=lambda p: self.titles.get(p.key),
+            probe_call_evidence=lambda p: self.evidence,
+            enabled=lambda p: p.key not in self.disabled,
             clock=lambda: self.t,
         )
 
@@ -35,43 +43,76 @@ def test_teams_start_after_hold():
     w.advance(d, 2)
     assert w.events == []
     w.advance(d, 4)
-    assert w.events == [("start", CallApp.TEAMS)]
+    assert w.events == [("start", "Teams")]
 
 
-def test_teams_running_without_mic_no_start():
+def test_nothing_without_mic():
     w = World()
     d = w.detector()
     w.advance(d, 60)
     assert w.events == []
 
 
-def test_firefox_mic_without_meet_no_start():
+def test_browser_mic_starts_call_named_by_title():
     w = World()
     d = w.detector()
-    w.mic = {FIREFOX}
-    w.meet = False
-    w.advance(d, 60)
-    assert w.events == []
-
-
-def test_meet_starts():
-    w = World()
-    d = w.detector()
-    w.mic = {FIREFOX}
-    w.meet = True
+    w.mic = {CHROME}
+    w.titles["chrome"] = "Meet"
     w.advance(d, 8)
-    assert w.events == [("start", CallApp.MEET)]
+    assert w.events == [("start", "Meet")]
 
 
-def test_meet_continues_when_title_gone():
+def test_browser_without_known_title_uses_browser_name():
     w = World()
     d = w.detector()
     w.mic = {FIREFOX}
-    w.meet = True
     w.advance(d, 8)
-    w.meet = False
+    assert w.events == [("start", "Firefox")]
+
+
+def test_call_continues_when_title_gone():
+    w = World()
+    d = w.detector()
+    w.mic = {FIREFOX}
+    w.titles["firefox"] = "Meet"
+    w.advance(d, 8)
+    w.titles["firefox"] = None
     w.advance(d, 600)
-    assert w.events == [("start", CallApp.MEET)]
+    assert w.events == [("start", "Meet")]
+
+
+def test_disabled_platform_ignored():
+    w = World()
+    d = w.detector()
+    w.disabled = {"discord"}
+    w.mic = {DISCORD}
+    w.advance(d, 30)
+    assert w.events == []
+
+
+def test_needs_call_evidence():
+    w = World()
+    d = w.detector()
+    w.mic = {WHATSAPP}
+    w.evidence = False
+    w.advance(d, 30)
+    assert w.events == []
+    w.evidence = True
+    w.advance(d, 8)
+    assert w.events == [("start", "WhatsApp")]
+
+
+def test_second_platform_does_not_switch_active_call():
+    w = World()
+    d = w.detector()
+    w.mic = {TEAMS}
+    w.advance(d, 8)
+    w.mic = {TEAMS, CHROME}
+    w.advance(d, 30)
+    assert w.events == [("start", "Teams")]
+    w.mic = {CHROME}  # Teams suelta el micro: termina su llamada
+    w.advance(d, 14)
+    assert w.events[:2] == [("start", "Teams"), ("stop", "Teams")]
 
 
 def test_stop_after_grace():
@@ -81,9 +122,9 @@ def test_stop_after_grace():
     w.advance(d, 8)
     w.mic = set()
     w.advance(d, 6)
-    assert ("stop", CallApp.TEAMS) not in w.events
+    assert ("stop", "Teams") not in w.events
     w.advance(d, 8)
-    assert w.events[-1] == ("stop", CallApp.TEAMS)
+    assert w.events[-1] == ("stop", "Teams")
 
 
 def test_brief_mic_release_no_stop():
@@ -95,7 +136,7 @@ def test_brief_mic_release_no_stop():
     w.advance(d, 4)
     w.mic = {TEAMS}
     w.advance(d, 30)
-    assert w.events == [("start", CallApp.TEAMS)]
+    assert w.events == [("start", "Teams")]
 
 
 def test_suspended_no_start():
@@ -107,7 +148,32 @@ def test_suspended_no_start():
     assert w.events == []
     d.resume()
     w.advance(d, 8)
-    assert w.events == [("start", CallApp.TEAMS)]
+    assert w.events == [("start", "Teams")]
+
+
+def test_manual_stop_dismisses_browser_until_release():
+    w = World()
+    d = w.detector()
+    w.mic = {FIREFOX}
+    w.advance(d, 8)
+    d.dismiss()
+    w.advance(d, 60)
+    assert w.events == [("start", "Firefox")]
+    w.mic = set()
+    w.advance(d, 14)
+    assert w.events == [("start", "Firefox")]  # sin aviso de fin
+    w.mic = {FIREFOX}
+    w.advance(d, 8)
+    assert w.events == [("start", "Firefox"), ("start", "Firefox")]
+
+
+def test_detected_carries_platform_and_exe():
+    got = []
+    w = World()
+    d = CallDetector(on_start=got.append, on_stop=lambda x: None, probe_mic=lambda: {DISCORD},
+                     probe_title=lambda p: None, probe_call_evidence=lambda p: True, clock=lambda: w.t)
+    w.advance(d, 8)
+    assert got[0].platform is platform_for_key(DISCORD) and got[0].exe == "discord.exe"
 
 
 def test_mic_in_use_parses_registry():
@@ -118,48 +184,3 @@ def test_mic_in_use_parses_registry():
         "NonPackaged/C:#never#used.exe": (0, 0),
     }
     assert mic_in_use(reader=lambda: entries) == {TEAMS, FIREFOX}
-
-
-def test_dismissed_call_not_restarted_and_no_stop_event():
-    w = World()
-    d = w.detector()
-    w.mic = {TEAMS}
-    w.advance(d, 8)
-    d.dismiss()
-    w.advance(d, 60)
-    assert w.events == [("start", CallApp.TEAMS)]
-    w.mic = set()
-    w.advance(d, 14)
-    assert w.events == [("start", CallApp.TEAMS)]
-    w.mic = {TEAMS}
-    w.advance(d, 8)
-    assert w.events == [("start", CallApp.TEAMS), ("start", CallApp.TEAMS)]
-
-
-def test_meet_title_matching():
-    from calltx.detector import is_meet_title
-
-    assert is_meet_title("Meet - abc-defg-hij — Mozilla Firefox")
-    assert is_meet_title("Meet – Reunión semanal — Mozilla Firefox")
-    assert is_meet_title("Google Meet — Mozilla Firefox")
-    assert not is_meet_title("Meeting notes – Google Docs — Mozilla Firefox")
-    assert not is_meet_title("Meetup: Python Madrid — Mozilla Firefox")
-
-
-def test_detector_disabled_app():
-    w = World()
-    d = CallDetector(
-        on_start=lambda a: w.events.append(("start", a)),
-        on_stop=lambda a: w.events.append(("stop", a)),
-        probe_mic=lambda: set(w.mic),
-        probe_meet=lambda: w.meet,
-        clock=lambda: w.t,
-        enabled=lambda app: app is not CallApp.TEAMS,
-    )
-    w.mic = {TEAMS}
-    w.advance(d, 20)
-    assert w.events == []
-    w.mic = {FIREFOX}
-    w.meet = True
-    w.advance(d, 8)
-    assert w.events == [("start", CallApp.MEET)]
