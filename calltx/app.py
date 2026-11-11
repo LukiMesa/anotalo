@@ -64,6 +64,7 @@ class App:
         self.last_path: Path | None = None
         self._wait_ready = wait_ready or (lambda timeout: True)
         self._stopping = False
+        self.updating = False  # instalador lanzado: la app se cerrará en segundos
 
     # --- estado ------------------------------------------------------------
     @property
@@ -140,6 +141,9 @@ class App:
 
     def _model_ready(self) -> bool:
         """No bloquea: mientras se prepara el modelo (descargas del primer uso) no se graba."""
+        if self.updating:
+            self._notify("Actualizando la app", "Podrás grabar en cuanto se vuelva a abrir")
+            return False
         prep = self.preparing  # copia: otro hilo puede cambiarlo
         if prep is None and self._wait_ready(0):
             return True

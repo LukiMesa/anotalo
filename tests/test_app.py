@@ -393,3 +393,14 @@ def test_stopping_manual_call_dismisses_platforms_in_use():
     h.app.toggle()  # una nota rápida no descarta nada
     h.app.toggle()
     assert h.det.dismissed_in_use == 1
+
+
+def test_no_new_recording_while_updating():
+    # Tras lanzar el instalador, la app se cerrará en segundos: no empezar grabaciones que se perderían.
+    h = Harness()
+    h.app.updating = True
+    h.app.toggle()
+    h.app.start_call_manual()
+    h.det.on_start(TEAMS)
+    assert h.sessions == []
+    assert any("Actualizando" in n[0] for n in h.notes)

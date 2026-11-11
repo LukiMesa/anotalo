@@ -309,9 +309,14 @@ def main() -> int:
             settings.update_notified = version
             persist()
 
+        def on_update_change() -> None:
+            app.updating = updater.state == "installing"  # no empezar grabaciones que se perderían
+            if holder.get("win"):
+                holder["win"].push({"type": "update", **updater.snapshot()})
+
         updater = UpdateManager(
             __version__, is_recording=lambda: app.recording_active, notify=_notifier,
-            on_change=lambda: holder.get("win") and holder["win"].push({"type": "update", **updater.snapshot()}),
+            on_change=lambda: on_update_change(),
             notified_version=settings.update_notified, on_notified=remember_notified,
         )
         app.on_session_end.append(lambda *_: threading.Thread(
