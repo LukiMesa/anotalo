@@ -8,5 +8,9 @@ license.workspace = true
 name = "anotalo"
 path = "src/main.rs"
 
+[dependencies]
+anotalo-whisper = { path = "../whisper" }
+hound = "3"
+
 [build-dependencies]
 winresource = "0.1"
