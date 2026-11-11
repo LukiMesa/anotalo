@@ -4,7 +4,7 @@ Windows registra qué apps usan el micrófono en
 HKCU\...\CapabilityAccessManager\ConsentStore\microphone: mientras una app lo
 usa, su LastUsedTimeStop vale 0. Una llamada empieza cuando una de las apps de
 calltx/platforms.py usa el micro unos segundos (y, si hace falta, hay señales de llamada,
-p. ej. WhatsApp con notas de voz). Termina SOLO cuando esa app suelta el micro (cambiar
+p. ej. WhatsApp necesita más tiempo por las notas de voz). Termina SOLO cuando esa app suelta el micro (cambiar
 de pestaña o de app no corta la grabación).
 """
 
@@ -112,7 +112,6 @@ class CallDetector:
         on_stop: Callable[[Detected], None],
         probe_mic: Callable[[], set[str]] = mic_in_use,
         probe_title: Callable[[Platform], str | None] = window_site,
-        probe_call_evidence: Callable[[Platform], bool] = lambda p: True,
         clock: Callable[[], float] = time.monotonic,
         start_hold_s: float = 4.0,
         stop_grace_s: float = 10.0,
@@ -123,7 +122,6 @@ class CallDetector:
         self._on_stop = on_stop
         self._probe_mic = probe_mic
         self._probe_title = probe_title
-        self._probe_evidence = probe_call_evidence
         self._clock = clock
         self._hold = start_hold_s
         self._grace = stop_grace_s
@@ -169,16 +167,14 @@ class CallDetector:
             return
         if self._suspended:
             return
-        cand = next((p for p in PLATFORMS
-                     if p.key in in_use and self._enabled(p)
-                     and (not p.needs_call_evidence or self._probe_evidence(p))), None)
+        cand = next((p for p in PLATFORMS if p.key in in_use and self._enabled(p)), None)
         if cand is None:
             self._candidate = None
             return
         if cand != self._candidate:
             self._candidate, self._candidate_since = cand, now
             return
-        if now - self._candidate_since >= self._hold:
+        if now - self._candidate_since >= (cand.start_hold_s or self._hold):
             self._candidate = None
             self.active = Detected(cand, self._label(cand), cand.exes[0] if cand.exes else None)
             log.info("Llamada detectada: %s (%s)", self.active.label, cand.name)

@@ -13,7 +13,6 @@ class World:
         self.t = 0.0
         self.mic: set[str] = set()
         self.titles: dict[str, str | None] = {}  # clave de plataforma -> sitio reconocido
-        self.evidence = True
         self.disabled: set[str] = set()
         self.events: list[tuple[str, str]] = []  # (start|stop, etiqueta)
 
@@ -23,7 +22,6 @@ class World:
             on_stop=lambda d: self.events.append(("stop", d.label)),
             probe_mic=lambda: set(self.mic),
             probe_title=lambda p: self.titles.get(p.key),
-            probe_call_evidence=lambda p: self.evidence,
             enabled=lambda p: p.key not in self.disabled,
             clock=lambda: self.t,
         )
@@ -90,15 +88,20 @@ def test_disabled_platform_ignored():
     assert w.events == []
 
 
-def test_needs_call_evidence():
+def test_whatsapp_voice_message_ignored_call_detected():
+    # WhatsApp usa el micro también al grabar una nota de voz (~20 s en la prueba del dueño):
+    # solo cuenta como llamada tras 30 s seguidos de micro.
     w = World()
     d = w.detector()
     w.mic = {WHATSAPP}
-    w.evidence = False
-    w.advance(d, 30)
+    w.advance(d, 24)  # nota de voz de 24 s
+    w.mic = set()
+    w.advance(d, 20)
     assert w.events == []
-    w.evidence = True
-    w.advance(d, 8)
+    w.mic = {WHATSAPP}  # llamada
+    w.advance(d, 28)
+    assert w.events == []
+    w.advance(d, 4)
     assert w.events == [("start", "WhatsApp")]
 
 
@@ -171,7 +174,7 @@ def test_detected_carries_platform_and_exe():
     got = []
     w = World()
     d = CallDetector(on_start=got.append, on_stop=lambda x: None, probe_mic=lambda: {DISCORD},
-                     probe_title=lambda p: None, probe_call_evidence=lambda p: True, clock=lambda: w.t)
+                     probe_title=lambda p: None, clock=lambda: w.t)
     w.advance(d, 8)
     assert got[0].platform is platform_for_key(DISCORD) and got[0].exe == "discord.exe"
 

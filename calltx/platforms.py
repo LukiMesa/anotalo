@@ -20,16 +20,18 @@ class Platform:
     exes: tuple[str, ...] = ()  # procesos (en minúsculas)
     packaged: tuple[str, ...] = ()  # prefijo de la app empaquetada en el registro (en minúsculas)
     audio: Literal["process", "device"] = "process"  # de dónde sale la voz de los demás
-    needs_call_evidence: bool = False  # el micro solo no basta (p. ej. notas de voz)
+    start_hold_s: float | None = None  # segundos de micro antes de contar como llamada (None = el general)
     browser: bool = False
 
 
 PLATFORMS: tuple[Platform, ...] = (
     Platform("teams", "Teams", "detect_teams", ("ms-teams.exe", "teams.exe"), ("msteams_",)),
     Platform("zoom", "Zoom", "detect_zoom", ("zoom.exe",)),
-    # WhatsApp suena desde procesos de WebView2 fuera de su árbol: se graba el audio del equipo.
-    Platform("whatsapp", "WhatsApp", "detect_whatsapp", ("whatsapp.exe", "whatsapp.root.exe"),
-             ("5319275a.whatsappdesktop_",), audio="device", needs_call_evidence=True),
+    # WhatsApp usa el micro también al grabar notas de voz y su ventana no cambia (prueba del
+    # dueño): solo cuenta tras 30 s seguidos. Se pierden los primeros 30 s de la llamada.
+    # Suena desde procesos de WebView2 fuera de su árbol: se graba el audio del equipo.
+    Platform("whatsapp", "WhatsApp", "detect_whatsapp", ("whatsapp.root.exe", "whatsapp.exe"),
+             ("5319275a.whatsappdesktop_",), audio="device", start_hold_s=30.0),
     Platform("slack", "Slack", "detect_slack", ("slack.exe",), ("91750d7e.slack_",)),
     Platform("discord", "Discord", "detect_discord", ("discord.exe",)),
     Platform("firefox", "Firefox", "detect_browsers", ("firefox.exe",), browser=True),
