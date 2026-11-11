@@ -185,3 +185,37 @@ def test_first_run_after_update_notifies_once():
     assert announce_if_updated(s, "0.6.1", lambda *a: notes.append(a)) is True
     assert notes == [("Transcriptor actualizado", "Ya tienes la versión 0.6.1")]
     assert s.last_run_version == "0.6.1"
+
+
+def test_recording_started_during_download_waits_and_reuses_file():
+    e = Env()
+    m = e.manager()
+    downloads = []
+
+    def dl(rel, dest, progress):
+        downloads.append(1)
+        e.recording = True  # empieza otra llamada mientras se descarga
+        return "setup-0.6.0.exe"
+
+    m._download = dl
+    m.check()
+    m.install()
+    assert m.state == "waiting" and e.installed == []
+    e.recording = False
+    m.on_recording_end()
+    assert e.installed == ["setup-0.6.0.exe"] and downloads == [1]  # no vuelve a descargar
+
+
+def test_installing_that_never_closes_the_app_becomes_error():
+    import time
+
+    e = Env()
+    m = e.manager()
+    m._installing_timeout_s = 0.05
+    m.check()
+    m.install()
+    assert m.state == "installing"
+    time.sleep(0.3)
+    assert m.state == "error" and m.error
+    m.install()  # se puede reintentar
+    assert e.installed == ["setup-0.6.0.exe", "setup-0.6.0.exe"]

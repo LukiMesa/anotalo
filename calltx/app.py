@@ -85,6 +85,11 @@ class App:
         return self._session
 
     @property
+    def recording_active(self) -> bool:
+        """Grabando o terminando de guardar la última grabación (no cerrar la app)."""
+        return self._session is not None or self.busy
+
+    @property
     def session_kind(self) -> Literal["note", "call", "manual"] | None:
         if self._session is None:
             return None
@@ -210,6 +215,7 @@ class App:
         self._changed()
 
     def _stop_session(self, user: bool) -> None:
+        kind = self.session_kind
         session, was_auto, label = self._session, self._session_auto, self._label
         self._session, self._session_auto, self._label, self._others = None, False, None, None
         self.busy = True
@@ -237,6 +243,8 @@ class App:
                 log.exception("Error en listener de fin de grabación")
         if was_auto and user:
             self._detector.dismiss()
+        elif kind == "manual" and user:
+            self._detector.dismiss_in_use()
         self._sync_detector()
         self._changed()
 

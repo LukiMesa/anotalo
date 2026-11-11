@@ -39,6 +39,9 @@ class FakeDetector:
     def dismiss(self):
         self.dismissed += 1
 
+    def dismiss_in_use(self):
+        pass
+
 
 class FakeSession:
     def __init__(self, label, others, text="texto de Yo"):
@@ -368,3 +371,25 @@ def test_detected_platform_label_and_audio():
     h.det.on_stop(det("whatsapp"))
     h.det.on_start(det("zoom"))
     assert h.sessions[1].others == OthersSpec("process", "zoom.exe")
+
+
+def test_recording_active_includes_saving():
+    h = Harness()
+    assert h.app.recording_active is False
+    h.app.toggle()
+    assert h.app.recording_active is True
+    h.app.toggle()
+    h.app.busy = True  # cerrando la grabación (últimas frases)
+    assert h.app.recording_active is True
+
+
+def test_stopping_manual_call_dismisses_platforms_in_use():
+    h = Harness()
+    h.det.dismissed_in_use = 0
+    h.det.dismiss_in_use = lambda: setattr(h.det, "dismissed_in_use", h.det.dismissed_in_use + 1)
+    h.app.start_call_manual()
+    h.app.toggle_call()
+    assert h.det.dismissed_in_use == 1
+    h.app.toggle()  # una nota rápida no descarta nada
+    h.app.toggle()
+    assert h.det.dismissed_in_use == 1

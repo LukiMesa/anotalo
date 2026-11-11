@@ -65,12 +65,42 @@ begin
   Result := Result and (v <> '') and (v <> '0.0.0.0');
 end;
 
+var
+  AppWasRunning: Boolean;  // se cerró la app para instalar
+  InstallDone: Boolean;    // los archivos nuevos quedaron instalados
+
 procedure CloseRunningApp();
 var code: Integer;
 begin
   // La app solo se oculta al cerrar su ventana: se termina para poder reemplazar sus archivos.
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM Transcriptor.exe', '', SW_HIDE, ewWaitUntilTerminated, code);
+  // Sin /T: cuando la app lanza este instalador para actualizarse, el instalador es su hijo
+  // y /T lo mataría también. El proceso de transcripción se llama igual y cae con /IM.
+  if Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Transcriptor.exe', '', SW_HIDE, ewWaitUntilTerminated, code) and (code = 0) then
+    AppWasRunning := True;
   Sleep(800);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    InstallDone := True;
+end;
+
+procedure DeinitializeSetup();
+var code: Integer; exe: String;
+begin
+  // Actualización silenciosa que falló o se canceló después de cerrar la app: volver a abrirla
+  // (si terminó bien, la abre la sección [Run]).
+  if WizardSilent and AppWasRunning and not InstallDone then
+  begin
+    try
+      exe := ExpandConstant('{app}\Transcriptor.exe');
+    except
+      exe := ExpandConstant('{localappdata}\Programs\Transcriptor\Transcriptor.exe');
+    end;
+    if FileExists(exe) then
+      Exec(exe, '--minimized', '', SW_SHOWNORMAL, ewNoWait, code);
+  end;
 end;
 
 function InitializeUninstall(): Boolean;

@@ -187,3 +187,44 @@ def test_mic_in_use_parses_registry():
         "NonPackaged/C:#never#used.exe": (0, 0),
     }
     assert mic_in_use(reader=lambda: entries) == {TEAMS, FIREFOX}
+
+
+def test_dismissed_browser_does_not_hide_other_calls():
+    w = World()
+    d = w.detector()
+    w.mic = {FIREFOX}
+    w.advance(d, 8)
+    d.dismiss()  # la web del navegador no era una llamada: parada a mano
+    w.mic = {FIREFOX, TEAMS}  # la pestaña sigue con el micro y entra una llamada de Teams
+    w.advance(d, 8)
+    assert w.events == [("start", "Firefox"), ("start", "Teams")]
+
+
+def test_dismiss_in_use_blocks_restart_until_release():
+    # Al parar a mano una "Grabar llamada" durante una llamada del navegador, no debe
+    # empezar otra grabación de esa misma llamada al reanudarse la detección.
+    w = World()
+    d = w.detector()
+    d.suspend()
+    w.mic = {CHROME}
+    w.advance(d, 20)
+    d.dismiss_in_use()
+    d.resume()
+    w.advance(d, 30)
+    assert w.events == []
+    w.mic = set()
+    w.advance(d, 14)
+    w.mic = {CHROME}
+    w.advance(d, 8)
+    assert w.events == [("start", "Chrome")]
+
+
+def test_dismiss_without_active_call_is_harmless():
+    w = World()
+    d = w.detector()
+    d.dismiss()
+    w.mic = {TEAMS}
+    w.advance(d, 8)
+    w.mic = set()
+    w.advance(d, 14)
+    assert w.events == [("start", "Teams"), ("stop", "Teams")]

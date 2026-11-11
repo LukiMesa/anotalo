@@ -130,7 +130,8 @@ class CallDetector:
         self._candidate_since = 0.0
         self.active: Detected | None = None
         self._released_since: float | None = None
-        self._dismissed = False
+        # plataformas paradas a mano: no cuentan hasta que suelten el micro (clave -> desde cuándo lo soltaron)
+        self._dismissed: dict[str, float | None] = {}
         self._stop_evt = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -153,6 +154,13 @@ class CallDetector:
     def tick(self) -> None:
         now = self._clock()
         in_use = platforms_in_use(self._probe_mic())
+        for key, since in list(self._dismissed.items()):
+            if key in in_use:
+                self._dismissed[key] = None
+            elif since is None:
+                self._dismissed[key] = now
+            elif now - since >= self._grace:
+                del self._dismissed[key]  # esa llamada terminó de verdad
         if self.active is not None:
             if self.active.platform.key in in_use:
                 self._released_since = None
@@ -160,14 +168,13 @@ class CallDetector:
                 self._released_since = now
             elif now - self._released_since >= self._grace:
                 det, self.active, self._released_since = self.active, None, None
-                dismissed, self._dismissed = self._dismissed, False
                 log.info("Fin de llamada %s", det.label)
-                if not dismissed:
-                    self._on_stop(det)
+                self._on_stop(det)
             return
         if self._suspended:
             return
-        cand = next((p for p in PLATFORMS if p.key in in_use and self._enabled(p)), None)
+        cand = next((p for p in PLATFORMS
+                     if p.key in in_use and p.key not in self._dismissed and self._enabled(p)), None)
         if cand is None:
             self._candidate = None
             return
@@ -200,6 +207,22 @@ class CallDetector:
             self._thread = None
 
     def dismiss(self) -> None:
-        """La sesión automática se paró a mano: no avisar del fin ni volver a arrancar
-        hasta que esa llamada termine de verdad (la app suelte el micro)."""
-        self._dismissed = True
+        """La grabación automática se paró a mano: esa app no cuenta (ni avisa del fin) hasta que
+        suelte el micro. Las demás apps se siguen detectando."""
+        det = self.active
+        if det is None:
+            return
+        self._dismissed[det.platform.key] = None
+        self.active, self._released_since = None, None
+        log.info("Llamada %s descartada hasta que suelte el micrófono", det.label)
+
+    def dismiss_in_use(self) -> None:
+        """Una llamada grabada a mano se paró: las apps que usan el micro ahora mismo (esa misma
+        llamada) no empiezan otra grabación hasta que lo suelten."""
+        try:
+            keys = platforms_in_use(self._probe_mic())
+        except Exception:  # noqa: BLE001
+            log.debug("No se pudo leer el micrófono", exc_info=True)
+            return
+        for key in keys:
+            self._dismissed[key] = None

@@ -310,7 +310,7 @@ def main() -> int:
             persist()
 
         updater = UpdateManager(
-            __version__, is_recording=lambda: app.session is not None, notify=_notifier,
+            __version__, is_recording=lambda: app.recording_active, notify=_notifier,
             on_change=lambda: holder.get("win") and holder["win"].push({"type": "update", **updater.snapshot()}),
             notified_version=settings.update_notified, on_notified=remember_notified,
         )

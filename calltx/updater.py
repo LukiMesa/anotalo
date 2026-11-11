@@ -159,6 +159,9 @@ class UpdateManager:
         self.release: Release | None = None
         self.progress: float | None = None
         self.error: str | None = None
+        self._path: Path | None = None  # instalador ya descargado y comprobado
+        self._installing_timeout_s = 120.0  # si la app sigue viva, el instalador falló
+        self._timeout: threading.Timer | None = None
 
     def _set(self, state: State, error: str | None = None) -> None:
         self.state, self.error = state, error
@@ -219,15 +222,36 @@ class UpdateManager:
     def _run(self) -> None:
         rel = self.release
         try:
-            self.progress = 0.0
-            path = self._download(rel, self._dest, self._progress)
-            self._set("installing")
+            if self._path is None:
+                self.progress = 0.0
+                self._path = self._download(rel, self._dest, self._progress)
+            with self._lock:
+                # La descarga tarda: puede haber empezado otra grabación mientras tanto.
+                if self._is_recording():
+                    self._set("waiting")
+                    return
+                self._set("installing")
             log.info("Instalando la versión %s", rel.version)
-            self._install(path)
+            self._install(self._path)
+            self._arm_timeout()
         except Exception as e:  # noqa: BLE001
             log.warning("No se pudo actualizar: %s", e)
             self.progress = None
+            self._path = None
             self._set("error", str(e))
+
+    def _arm_timeout(self) -> None:
+        """El instalador cierra esta app en segundos. Si sigue viva al rato, algo falló."""
+        def expire():
+            with self._lock:
+                if self.state != "installing":
+                    return
+                self._path = None
+                self._set("error", "La instalación no se completó. Vuelve a intentarlo.")
+
+        self._timeout = threading.Timer(self._installing_timeout_s, expire)
+        self._timeout.daemon = True
+        self._timeout.start()
 
     def _progress(self, p: float) -> None:
         if self.progress is None or int(p * 100) != int(self.progress * 100):
