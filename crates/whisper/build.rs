@@ -80,7 +80,7 @@ fn main() {
         .define("WHISPER_BUILD_TESTS", "OFF")
         .build();
 
-    // 5. Enlace: todo estático salvo vulkan-1.dll (de carga diferida en el exe y en los tests).
+    // 5. Enlace: todo estático salvo vulkan-1.dll (de carga diferida: .cargo/config.toml).
     println!(
         "cargo:rustc-link-search=native={}",
         wcpp.join("lib").display()
@@ -93,9 +93,7 @@ fn main() {
         println!("cargo:rustc-link-lib=static={lib}");
     }
     println!("cargo:rustc-link-lib=dylib=vulkan-1");
-    println!("cargo:rustc-link-lib=delayimp");
     println!("cargo:rustc-link-lib=advapi32"); // ggml-cpu lee el nombre del procesador del registro
-    println!("cargo:rustc-link-arg-tests=/DELAYLOAD:vulkan-1.dll");
 
     // 6. El puente (C++ para atrapar las excepciones de whisper.cpp antes de llegar a Rust).
     cc::Build::new()

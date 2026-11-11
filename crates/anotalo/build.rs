@@ -4,9 +4,6 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
-    // vulkan-1.dll de carga diferida: en un PC sin driver de GPU el exe arranca igual y usa la CPU
-    println!("cargo:rustc-link-arg-bins=/DELAYLOAD:vulkan-1.dll");
-    println!("cargo:rustc-link-lib=delayimp");
     let version = std::env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION");
     let icon = "../../calltx/ui/assets/icon.ico"; // hasta que llegue el icono de Anotalo (M3)
     println!("cargo:rerun-if-changed={icon}");

@@ -1,3 +1,9 @@
-# CRT estático: el exe no depende de MSVCP*/VCRUNTIME*/UCRT (spec §5.1)
+# CRT estático: el exe no depende de MSVCP*/VCRUNTIME*/UCRT (spec §5.1).
+# vulkan-1.dll de carga diferida en TODOS los binarios (exe, ejemplos, tests): en un PC sin driver
+# de GPU arrancan igual y usan la CPU. En los que no usan whisper el enlazador avisa LNK4199: es normal.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = [
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=/DELAYLOAD:vulkan-1.dll",
+    "-C", "link-arg=delayimp.lib",
+]

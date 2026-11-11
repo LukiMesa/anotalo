@@ -12,12 +12,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "anotalo-core"
+version = "0.1.0"
+dependencies = [
+ "anotalo-whisper",
+]
+
+[[package]]
 name = "anotalo-whisper"
 version = "0.1.0"
 dependencies = [
  "cc",
  "cmake",
  "hound",
+]
+
+[[package]]
+name = "anotalo-winaudio"
+version = "0.1.0"
+dependencies = [
+ "anotalo-core",
 ]
 
 [[package]]

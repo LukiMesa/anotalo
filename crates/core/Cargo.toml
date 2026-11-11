@@ -1,0 +1,8 @@
+[package]
+name = "anotalo-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anotalo-whisper = { path = "../whisper" }
