@@ -1,7 +1,9 @@
-"""Captura del audio de UN proceso (y sus hijos) con WASAPI process loopback (Windows 10 2004+/11).
+"""Captura de lo que suena, con WASAPI loopback:
 
-Así "Otros" solo contiene el audio de Teams/Firefox, no notificaciones ni otras apps,
-y funciona sea cual sea el dispositivo de salida que use la app de la llamada.
+- ProcessLoopbackSource: el audio de UN proceso (y sus hijos), Windows 10 2004+/11. "Otros" solo
+  contiene el audio de Zoom/Firefox…, no notificaciones ni otras apps, sea cual sea la salida.
+- EndpointLoopbackSource: todo lo que suena en UN dispositivo de salida concreto (el que usa la
+  llamada, p. ej. los auriculares Bluetooth), leído en el momento.
 """
 
 from __future__ import annotations
@@ -214,7 +216,7 @@ class ProcessLoopbackSource:
         def run():
             comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
             try:
-                client = _activate(self.pid)
+                client = self._activate()
                 fmt = _format()
                 client.Initialize(
                     AUDCLNT_SHAREMODE_SHARED,
@@ -251,6 +253,12 @@ class ProcessLoopbackSource:
             self._thread.join(3)
             self._thread = None
 
+    def _activate(self) -> IAudioClient:
+        return _activate(self.pid)
+
+    def describe(self) -> str:
+        return f"el audio del proceso {self.pid}"
+
     def is_active(self) -> bool:
         import psutil
 
@@ -261,7 +269,7 @@ class ProcessLoopbackSource:
         event = None
         client = None
         try:
-            client = _activate(self.pid)
+            client = self._activate()
             fmt = _format()
             client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
@@ -272,7 +280,7 @@ class ProcessLoopbackSource:
             client.SetEventHandle(event)
             capture = client.GetService(byref(IAudioCaptureClient._iid_)).QueryInterface(IAudioCaptureClient)
             client.Start()
-            log.info("Capturando audio del proceso %d", self.pid)
+            log.info("Capturando %s", self.describe())
         except BaseException as e:  # noqa: BLE001
             self._error = e
             self._ready.set()
@@ -299,7 +307,7 @@ class ProcessLoopbackSource:
                     x = np.frombuffer(b"".join(chunks), dtype=np.int16)
                     on_audio(now - frames_total / SR, to_mono_16k(x, SR, CHANNELS))
         except Exception:  # noqa: BLE001
-            log.exception("Captura del proceso %d interrumpida", self.pid)
+            log.warning("Captura de %s interrumpida", self.describe(), exc_info=True)
         finally:
             try:
                 client.Stop()
@@ -309,3 +317,26 @@ class ProcessLoopbackSource:
                 _kernel32.CloseHandle(event)
             del capture, client
             comtypes.CoUninitialize()
+
+
+class EndpointLoopbackSource(ProcessLoopbackSource):
+    """Todo lo que suena en un dispositivo de salida concreto (por su id de Windows)."""
+
+    name = "loopback-endpoint"
+
+    def __init__(self, endpoint_id: str, endpoint_name: str = ""):
+        super().__init__(0)
+        self.endpoint_id = endpoint_id
+        self.endpoint_name = endpoint_name or endpoint_id
+
+    def _activate(self) -> IAudioClient:
+        from .coreaudio import activate_endpoint
+
+        return activate_endpoint(self.endpoint_id, IAudioClient._iid_).QueryInterface(IAudioClient)
+
+    def describe(self) -> str:
+        return f"lo que suena en {self.endpoint_name}"
+
+    def is_active(self) -> bool:
+        # si el dispositivo desaparece (auriculares apagados), el hilo termina y la sesión reabre
+        return self._thread is not None and self._thread.is_alive()

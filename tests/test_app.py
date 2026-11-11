@@ -111,10 +111,11 @@ def test_auto_stop_ignores_manual_session():
     assert not h.sessions[0].stopped
 
 
-def test_auto_start_uses_teams_pid():
+def test_auto_start_teams_records_its_output_device():
+    # Capturar solo el proceso de Teams da silencio en algunos PCs: se graba su dispositivo de salida
     h = Harness()
     h.det.on_start(TEAMS)
-    assert (h.sessions[0].label, h.sessions[0].others) == ("Teams", OthersSpec("process", "ms-teams.exe"))
+    assert (h.sessions[0].label, h.sessions[0].others) == ("Teams", OthersSpec("device", platform="teams"))
     h.det.on_stop(TEAMS)
     assert h.sessions[0].stopped
 
@@ -122,7 +123,7 @@ def test_auto_start_uses_teams_pid():
 def test_meet_uses_firefox():
     h = Harness()
     h.det.on_start(MEET)
-    assert h.sessions[0].others == OthersSpec("process", "firefox.exe")
+    assert h.sessions[0].others == OthersSpec("process", "firefox.exe", "firefox")
 
 
 def test_hotkey_stop_of_auto_session_dismisses():
@@ -366,11 +367,11 @@ def test_toggle_call_starts_and_stops():
 def test_detected_platform_label_and_audio():
     h = Harness()
     h.det.on_start(det("whatsapp"))
-    assert (h.sessions[0].label, h.sessions[0].others) == ("WhatsApp", OthersSpec("device"))
+    assert (h.sessions[0].label, h.sessions[0].others) == ("WhatsApp", OthersSpec("device", platform="whatsapp"))
     assert h.app.session_kind == "call"
     h.det.on_stop(det("whatsapp"))
     h.det.on_start(det("zoom"))
-    assert h.sessions[1].others == OthersSpec("process", "zoom.exe")
+    assert h.sessions[1].others == OthersSpec("process", "zoom.exe", "zoom")
 
 
 def test_recording_active_includes_saving():

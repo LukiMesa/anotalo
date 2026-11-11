@@ -186,7 +186,25 @@ def test_mic_in_use_parses_registry():
         FIREFOX: (134372538113007236, 0),
         "NonPackaged/C:#never#used.exe": (0, 0),
     }
-    assert mic_in_use(reader=lambda: entries) == {TEAMS, FIREFOX}
+    assert mic_in_use(reader=lambda: entries, capture=set) == {TEAMS, FIREFOX}
+
+
+def test_mic_in_use_also_trusts_windows_audio_sessions():
+    # En un PC el registro de privacidad no anotaba a Teams aunque grababa del micro:
+    # cuenta también lo que el audio de Windows dice que está grabando.
+    from calltx.detector import platforms_in_use
+
+    seen = mic_in_use(reader=lambda: {}, capture=lambda: {"NonPackaged/#ms-teams.exe"})
+    assert platforms_in_use(seen) == {"teams"}
+    assert mic_in_use(reader=lambda: {TEAMS: (1, 0)}, capture=lambda: {TEAMS}) == {TEAMS}
+
+
+def test_mic_in_use_survives_either_source_failing():
+    def broken():
+        raise OSError("sin acceso")
+
+    assert mic_in_use(reader=broken, capture=lambda: {TEAMS}) == {TEAMS}
+    assert mic_in_use(reader=lambda: {FIREFOX: (1, 0)}, capture=broken) == {FIREFOX}
 
 
 def test_dismissed_browser_does_not_hide_other_calls():

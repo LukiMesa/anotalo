@@ -36,11 +36,12 @@ La ventana tiene su propia barra superior: arrástrala para mover, doble clic pa
 - **Abrir la ventana**: clic en el icono junto al reloj, o vuelve a abrir la app.
 - **Nota rápida**: `Ctrl+Alt+R` para empezar y otra vez para parar. Graba solo tu micrófono y copia al portapapeles lo que dijiste (sin horas ni etiquetas).
 - **Llamadas automáticas**: se graban solas cuando una de estas apps usa el micrófono, y paran al colgar:
-  - Teams, Zoom, Slack y Discord (Discord viene desactivado: también se usa fuera de llamadas de trabajo).
+  - Teams, Zoom, Slack y Discord (Discord viene desactivado: también se usa fuera de llamadas de trabajo). En Teams se graba lo que suena en la salida que usa (sus auriculares, aunque sean Bluetooth).
   - WhatsApp: cuenta como llamada tras 30 s seguidos de micrófono, para no grabar notas de voz cortas (los primeros 30 s no se transcriben).
   - Navegadores (Firefox, Chrome, Brave, Edge, Opera, Vivaldi): cualquier web que use el micrófono. La grabación toma el nombre de la plataforma si se ve en el título (Meet, Teams, Zoom, WhatsApp…), si no el del navegador.
   - Puedes cambiar de pestaña o de app sin cortar la grabación. Si paras una grabación a mano, esa app no vuelve a grabar hasta que suelte el micrófono.
-- **Grabar llamada** (botón junto a "Grabaciones" o menú del icono): graba tu micrófono y todo lo que suena en el equipo (pensado para auriculares). Para con el mismo botón o con el atajo.
+- **Grabar llamada** (botón junto a "Grabaciones" o menú del icono): graba tu micrófono y lo que suena en la salida donde está la llamada (pensado para auriculares). Para con el mismo botón o con el atajo.
+- Los dispositivos se eligen al empezar cada grabación: si conectas unos auriculares (también Bluetooth), se usan los que usa la llamada.
 - Las llamadas se guardan, no se copian. El atajo durante una llamada la detiene.
 - **Indicador**: píldora con barras al ritmo de tu voz → "Transcribiendo…" → "Copiado al portapapeles".
 

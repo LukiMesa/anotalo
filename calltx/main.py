@@ -144,7 +144,7 @@ def main() -> int:
 
     from . import autostart
     from .asr_remote import RemoteTranscriber
-    from .audio.sources import DefaultLoopbackSource, MicSource, find_root_pid, open_call_audio
+    from .audio.sources import pick_mic, pick_others
     from .clipboard import set_text as copy_text
     from .detector import CallDetector
     from .hotkey import GlobalHotkey, HotkeyError, validate_hotkey
@@ -266,17 +266,16 @@ def main() -> int:
 
     def session_factory(label: str, others_spec, on_line, on_level=None):
         """others_spec: None = nota rápida (solo micro); OthersSpec("process", exe) = audio de ese
-        programa; OthersSpec("device") = todo lo que suena en el equipo."""
+        programa; OthersSpec("device") = lo que suena en la salida donde está la llamada."""
         models.current.warm()  # el modelo carga mientras ya se graba
-        mic = MicSource(settings.mic_device)
+        # Los dispositivos se eligen en el momento: los que usa la llamada (p. ej. auriculares Bluetooth)
+        mic = pick_mic(others_spec.platform if others_spec else None, settings.mic_device)
         if others_spec is None:
             log.info("Nota rápida: solo micrófono")
             return CallSession(settings, models.current, label, mic, None, on_line=on_line, on_level=on_level)
 
         def make_others():
-            if others_spec.kind == "device":
-                return DefaultLoopbackSource()
-            return open_call_audio(find_root_pid(others_spec.exe))
+            return pick_others(others_spec)
 
         others = make_others()
         log.info("Sesión %s: audio de los demás desde %s", label, others.name)

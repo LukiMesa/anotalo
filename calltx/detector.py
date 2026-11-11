@@ -52,13 +52,38 @@ def _read_consent_store() -> dict[str, tuple[int, int]]:
     return out
 
 
-def mic_in_use(reader: Callable[[], dict[str, tuple[int, int]]] = _read_consent_store) -> set[str]:
+def _capture_keys() -> set[str]:
+    from .audio.coreaudio import capture_keys
+
+    return capture_keys()
+
+
+_audio_only: set[str] = set()
+
+
+def mic_in_use(reader: Callable[[], dict[str, tuple[int, int]]] = _read_consent_store,
+               capture: Callable[[], set[str]] = _capture_keys) -> set[str]:
+    """Apps usando el micro: lo que anota el registro de privacidad de Windows y lo que el audio
+    de Windows dice que está grabando ahora (en algún PC el registro no anotaba a Teams)."""
+    global _audio_only
     try:
         entries = reader()
-    except OSError as e:
+        reg = {k for k, (start, stop) in entries.items() if start > 0 and stop == 0}
+    except Exception as e:  # noqa: BLE001
         log.debug("No se pudo leer el registro del micrófono: %s", e)
-        return set()
-    return {k for k, (start, stop) in entries.items() if start > 0 and stop == 0}
+        reg = set()
+    try:
+        audio = set(capture())
+    except Exception as e:  # noqa: BLE001
+        log.debug("No se pudo leer el audio de Windows: %s", e)
+        audio = set()
+    only = platforms_in_use(audio) - platforms_in_use(reg)
+    if only != _audio_only:
+        if only:
+            log.info("Micrófono en uso por %s según el audio de Windows (el registro no lo anota)",
+                     ", ".join(sorted(only)))
+        _audio_only = only
+    return reg | audio
 
 
 @dataclass(frozen=True)

@@ -3,6 +3,8 @@ from calltx.platforms import platform_for_key, site_from_title
 
 def test_platform_for_registry_keys():
     assert platform_for_key("MSTeams_8wekyb3d8bbwe").key == "teams"
+    assert platform_for_key("MicrosoftTeams_8wekyb3d8bbwe").key == "teams"  # Teams personal (antiguo)
+    assert platform_for_key("NonPackaged/#ms-teams.exe").key == "teams"  # visto por el audio de Windows
     assert platform_for_key("5319275A.WhatsAppDesktop_cv1g1gvanyjgm").key == "whatsapp"
     assert platform_for_key("NonPackaged/C:#Users#x#AppData#Roaming#Zoom#bin#Zoom.exe").key == "zoom"
     assert platform_for_key("NonPackaged/C:#Program Files#BraveSoftware#Brave-Browser#Application#brave.exe").name == "Brave"
@@ -23,3 +25,11 @@ def test_site_from_title():
     assert site_from_title("YouTube - Google Chrome") is None
     assert site_from_title("Meeting notes – Google Docs — Mozilla Firefox") is None
     assert site_from_title("Meetup: Python Madrid — Mozilla Firefox") is None
+
+
+def test_teams_and_whatsapp_record_their_output_device():
+    from calltx.platforms import PLATFORMS
+
+    audio = {p.key: p.audio for p in PLATFORMS}
+    assert audio["teams"] == audio["whatsapp"] == "device"
+    assert audio["zoom"] == audio["chrome"] == "process"

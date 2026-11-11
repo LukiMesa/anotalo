@@ -24,6 +24,7 @@ class OthersSpec:
 
     kind: Literal["process", "device"]
     exe: str | None = None
+    platform: str | None = None  # plataforma de la llamada (None = grabada a mano)
 
 
 class App:
@@ -165,7 +166,7 @@ class App:
             self._begin(NOTE_LABEL, None, auto=False)
 
     def start_call_manual(self) -> None:
-        """Grabar llamada a mano: micrófono + todo lo que suena en el equipo (con auriculares)."""
+        """Grabar llamada a mano: micrófono + lo que suena en la salida de la llamada (con auriculares)."""
         if self._stopping or not self._model_ready():
             return
         with self._lock:
@@ -192,8 +193,9 @@ class App:
         with self._lock:
             if self._session is not None or self._stopping:
                 return
-            others = (OthersSpec("device") if detected.platform.audio == "device"
-                      else OthersSpec("process", detected.exe))
+            p = detected.platform
+            others = (OthersSpec("device", platform=p.key) if p.audio == "device"
+                      else OthersSpec("process", detected.exe, p.key))
             self._begin(detected.label, others, auto=True)
 
     def on_call_stop(self, detected: Detected) -> None:

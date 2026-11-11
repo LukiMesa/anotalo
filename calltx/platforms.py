@@ -25,7 +25,10 @@ class Platform:
 
 
 PLATFORMS: tuple[Platform, ...] = (
-    Platform("teams", "Teams", "detect_teams", ("ms-teams.exe", "teams.exe"), ("msteams_",)),
+    # Capturar solo el proceso de Teams da silencio en algunos PCs (fallo conocido de Windows):
+    # se graba el dispositivo donde suena Teams.
+    Platform("teams", "Teams", "detect_teams", ("ms-teams.exe", "teams.exe"),
+             ("msteams_", "microsoftteams_"), audio="device"),
     Platform("zoom", "Zoom", "detect_zoom", ("zoom.exe",)),
     # WhatsApp usa el micro también al grabar notas de voz y su ventana no cambia (prueba
     # real): solo cuenta tras 30 s seguidos. Se pierden los primeros 30 s de la llamada.
