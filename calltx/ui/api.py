@@ -51,8 +51,11 @@ class Api:
         device_info: Callable[[], str] = lambda: "",
         hotkey_capture: Callable[[bool], None] = lambda on: None,
         chrome=None,
+        updater=None,
     ):
         self._chrome = chrome
+        self._updater = updater  # UpdateManager en la versión instalada; None en desarrollo
+        self._run_bg = lambda fn: threading.Thread(target=fn, name="update-action", daemon=True).start()
         self._hotkey_capture = hotkey_capture
         self._capture_timeout_s = 20.0
         self._capture_timer: threading.Timer | None = None
@@ -191,7 +194,21 @@ class Api:
             "version": __version__,
             "frozen": is_frozen(),
             "kind": getattr(self._app, "session_kind", None),  # note | call | manual | None
+            "update": self._updater.snapshot() if self._updater else None,
         }
+
+    # --- actualizaciones -----------------------------------------------------
+    def check_updates(self) -> dict:
+        if self._updater is None:
+            return _err("Solo en la versión instalada")
+        self._run_bg(lambda: self._updater.check(user=True))
+        return {"ok": True}
+
+    def install_update(self) -> dict:
+        if self._updater is None:
+            return _err("Solo en la versión instalada")
+        self._run_bg(self._updater.install)
+        return {"ok": True}
 
     def toggle_call(self) -> dict:
         """Botón "Grabar llamada": empieza una llamada manual o para lo que se esté grabando."""

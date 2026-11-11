@@ -44,6 +44,8 @@ class Settings:
     detect_discord: bool = False  # también se usa fuera de llamadas de trabajo: solo si se activa
     detect_browsers: bool = True  # Firefox, Chrome, Brave, Edge, Opera, Vivaldi
     release_after_min: int = 10  # liberar el modelo tras N min sin grabar (0 = nunca)
+    update_notified: str = ""  # última versión de la que se avisó (una vez por versión)
+    last_run_version: str = ""  # versión del último arranque (para avisar tras actualizar)
 
 
 def default_config_path() -> Path:

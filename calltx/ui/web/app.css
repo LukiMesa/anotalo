@@ -1,4 +1,5 @@
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; background: var(--surface); color: var(--ink); font-family: var(--font-sans); font-size: 14px; -webkit-font-smoothing: antialiased; }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -33,6 +34,12 @@ html, body { overflow: hidden; }
 
 /* barra lateral */
 .side { width: 216px; flex: none; background: var(--surface-sunken); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 16px 12px 12px; position: relative; }
+.upd-note { margin-top: auto; padding: 12px; border-radius: var(--radius-md); background: var(--surface-raised); border: 1px solid var(--line); display: grid; gap: 6px; animation: rise-in var(--duration-view) var(--ease-out); }
+.upd-note[hidden] { display: none; }
+.upd-title { font-size: 12.5px; font-weight: 600; }
+.upd-sub { font-size: 12px; color: var(--ink-muted); }
+.upd-sub:empty { display: none; }
+.upd-note .btn { justify-self: start; }
 .nav-marker { position: absolute; left: 0; top: 0; width: 3px; height: 20px; border-radius: 0 3px 3px 0; background: var(--orbita); transition: transform var(--duration-base) var(--ease-out); pointer-events: none; }
 .nav-marker.instant { transition: none; }
 .brand { display: flex; align-items: center; gap: 10px; margin: 0 8px 24px; font-family: var(--font-display); font-weight: 600; font-size: 16px; letter-spacing: -0.01em; }

@@ -25,6 +25,11 @@
     <button class="nav" data-view="calls"><span data-icon="phone"></span>Llamadas</button>
     <button class="nav" data-view="model"><span data-icon="chip"></span>Modelo e idioma</button>
     <button class="nav" data-view="general"><span data-icon="gear"></span>General</button>
+    <div class="upd-note" id="upd-note" hidden>
+      <div class="upd-title" id="upd-note-title">Versión nueva disponible</div>
+      <div class="upd-sub" id="upd-note-sub"></div>
+      <button class="btn primary sm" id="upd-note-btn">Actualizar</button>
+    </div>
   </aside>
 
   <!-- Grabaciones -->
@@ -114,6 +119,10 @@
     <div class="card"><div class="ch">Grabaciones</div>
       <div class="set"><div class="l"><b>Carpeta</b><span class="path" id="folder"></span><span class="err" data-err="output_dir"></span></div>
         <button class="btn" id="open-folder">Abrir</button><button class="btn" id="choose-folder">Cambiar…</button></div>
+    </div>
+    <div class="card"><div class="ch">Actualizaciones</div>
+      <div class="set"><div class="l"><b>Versión de la app</b><span id="upd-text">Solo en la versión instalada</span><span class="err" data-err="update"></span></div>
+        <button class="btn" id="upd-check">Buscar actualizaciones</button><button class="btn primary" id="upd-install" hidden>Actualizar</button></div>
     </div>
     <div class="card"><div class="ch">Acerca de</div>
       <div class="set"><div class="l"><b>Transcriptor de llamadas</b><span id="version"></span></div></div>

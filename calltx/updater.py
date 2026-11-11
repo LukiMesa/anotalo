@@ -253,3 +253,14 @@ class UpdateManager:
 
     def stop(self) -> None:
         self._stop.set()
+
+
+def announce_if_updated(settings, version: str, notify: Callable[..., None]) -> bool:
+    """Tras actualizar, avisa una vez de la versión nueva. Devuelve True si cambió settings."""
+    prev = settings.last_run_version
+    if prev == version:
+        return False
+    settings.last_run_version = version
+    if prev:
+        notify("Transcriptor actualizado", f"Ya tienes la versión {version}")
+    return True

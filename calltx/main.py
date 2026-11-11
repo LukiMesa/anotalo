@@ -296,6 +296,27 @@ def main() -> int:
     app.on_session_end.append(lambda *_: models.on_idle())
     app.save_settings = persist
 
+    # --- actualizaciones (solo la versión instalada) ---------------------------
+    from . import __version__
+    from .updater import UpdateManager, announce_if_updated
+
+    updater = None
+    if is_frozen():
+        if announce_if_updated(settings, __version__, _notifier):
+            persist()
+
+        def remember_notified(version: str) -> None:
+            settings.update_notified = version
+            persist()
+
+        updater = UpdateManager(
+            __version__, is_recording=lambda: app.session is not None, notify=_notifier,
+            on_change=lambda: holder.get("win") and holder["win"].push({"type": "update", **updater.snapshot()}),
+            notified_version=settings.update_notified, on_notified=remember_notified,
+        )
+        app.on_session_end.append(lambda *_: threading.Thread(
+            target=updater.on_recording_end, name="update-after-recording", daemon=True).start())
+
     # --- ventana -------------------------------------------------------------
     holder: dict = {}
     api = Api(
@@ -306,6 +327,7 @@ def main() -> int:
         device_info=device_info,
         hotkey_capture=lambda on: hotkey.pause() if on else hotkey.resume(),
         chrome=Chrome(lambda: holder["win"].get_hwnd(), hide=lambda: holder["win"].hide()),
+        updater=updater,
     )
     win = MainWindow(api, start_hidden=start_hidden)
     holder["win"] = win
@@ -377,6 +399,8 @@ def main() -> int:
 
     # --- bandeja y salida ----------------------------------------------------
     def quit_all():
+        if updater is not None:
+            updater.stop()
         app.quit()
         persist()
         hotkey.stop()
@@ -398,6 +422,8 @@ def main() -> int:
         app.start()
         tray.run_detached()
         push_state()
+        if updater is not None:
+            updater.start_background()
         log.info("Transcriptor iniciado (atajo %s, modo automático %s)", settings.hotkey, settings.auto_mode)
 
     storage = cfg_path.parent / "webview"

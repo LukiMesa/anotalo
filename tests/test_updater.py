@@ -171,3 +171,17 @@ def test_installer_args():
     got = {}
     updater.run_installer(updater.Path("C:/x/setup.exe"), launcher=lambda args, **kw: got.update(args=args, kw=kw))
     assert got["args"][1:] == ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+
+
+def test_first_run_after_update_notifies_once():
+    from calltx.config import Settings
+    from calltx.updater import announce_if_updated
+
+    s = Settings()
+    notes = []
+    assert announce_if_updated(s, "0.6.0", lambda *a: notes.append(a)) is True  # primera vez: guarda, sin aviso
+    assert notes == [] and s.last_run_version == "0.6.0"
+    assert announce_if_updated(s, "0.6.0", lambda *a: notes.append(a)) is False
+    assert announce_if_updated(s, "0.6.1", lambda *a: notes.append(a)) is True
+    assert notes == [("Transcriptor actualizado", "Ya tienes la versión 0.6.1")]
+    assert s.last_run_version == "0.6.1"

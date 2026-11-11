@@ -190,6 +190,8 @@ window.onEvent = (evt) => {
     renderState(evt);
   } else if (evt.type === "window") {
     setMaxIcon(evt.maximized);
+  } else if (evt.type === "update") {
+    renderUpdate(evt);
   } else if (evt.type === "recordings") {
     loadList().then(() => { if (evt.select) select(evt.select); });
   }
@@ -309,6 +311,44 @@ document.addEventListener("keydown", async (e) => {
 
 // --- barra propia ---------------------------------------------------------
 $("#call-btn").onclick = async () => { const r = await api().toggle_call(); if (!r.ok) toast(esc(r.error)); };
+// --- actualizaciones -------------------------------------------------------
+function renderUpdate(u) {
+  const text = $("#upd-text"), check = $("#upd-check"), inst = $("#upd-install");
+  const note = $("#upd-note"), noteSub = $("#upd-note-sub"), noteBtn = $("#upd-note-btn");
+  if (!u) {  // versión de desarrollo
+    text.textContent = "Solo en la versión instalada";
+    check.disabled = true; inst.hidden = true; note.hidden = true;
+    return;
+  }
+  const v = u.version, pct = u.progress != null ? ` ${Math.round(u.progress * 100)} %` : "";
+  const msg = {
+    idle: `Tienes la versión ${u.current}.`,
+    checking: "Buscando actualizaciones…",
+    latest: `Tienes la última versión (${u.current}).`,
+    available: `Versión ${v} disponible.`,
+    downloading: `Descargando la versión ${v}…${pct}`,
+    waiting: `La versión ${v} se instalará al terminar la grabación.`,
+    installing: "Instalando… la app se cerrará y volverá a abrirse.",
+    error: v ? `Versión ${v} disponible.` : `Tienes la versión ${u.current}.`,
+  }[u.state] || "";
+  text.textContent = msg;
+  setErr("update", u.state === "error" ? u.error : "");
+  const canInstall = !!v && (u.state === "available" || u.state === "error");
+  check.disabled = ["checking", "downloading", "waiting", "installing"].includes(u.state);
+  inst.hidden = !canInstall;
+  inst.textContent = u.state === "error" ? "Reintentar" : "Actualizar";
+  const show = !!v && ["available", "downloading", "waiting", "installing", "error"].includes(u.state);
+  if (show && note.hidden) note.hidden = false;
+  if (!show) note.hidden = true;
+  $("#upd-note-title").textContent = `Versión ${v || ""} disponible`;
+  noteSub.textContent = u.state === "available" ? "" : msg;
+  noteBtn.hidden = !canInstall;
+  noteBtn.textContent = u.state === "error" ? "Reintentar" : "Actualizar";
+}
+$("#upd-check").onclick = async () => { const r = await api().check_updates(); if (!r.ok) setErr("update", r.error); };
+const doInstall = async () => { const r = await api().install_update(); if (!r.ok) toast(esc(r.error)); };
+$("#upd-install").onclick = doInstall;
+$("#upd-note-btn").onclick = doInstall;
 $("#tb-min").onclick = () => api().window_minimize();
 async function toggleMax() {
   setMaxIcon((await api().window_toggle_maximize()).maximized);
@@ -343,6 +383,8 @@ new ResizeObserver(() => moveThumb(true)).observe($(".seg"));
 window.addEventListener("pywebviewready", async () => {
   S.settings = await api().get_settings();
   renderSettings();
-  renderState(await api().get_state());
+  const st0 = await api().get_state();
+  renderState(st0);
+  renderUpdate(st0.update);
   await loadList("stagger");
 });

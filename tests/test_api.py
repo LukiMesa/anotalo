@@ -256,3 +256,36 @@ def test_manual_call_shows_as_manual(env):
     (folder / "2026-10-23_1700_Llamada.md").write_text(CALL.replace("Teams", "Llamada"), encoding="utf-8")
     rec = next(r for r in api.list_recordings() if r["id"] == "2026-10-23_1700_Llamada.md")
     assert rec["kind"] == "call" and rec["app"] == "Manual"
+
+
+class FakeUpdater:
+    def __init__(self):
+        self.calls = []
+
+    def snapshot(self):
+        return {"state": "available", "version": "0.6.0"}
+
+    def check(self, user=False):
+        self.calls.append(("check", user))
+
+    def install(self):
+        self.calls.append("install")
+
+
+def test_api_update_methods_delegate(env):
+    api, *_ = env
+    up = FakeUpdater()
+    api._updater = up
+    api._run_bg = lambda fn: fn()  # sin hilos en la prueba
+    assert api.check_updates() == {"ok": True}
+    assert api.install_update() == {"ok": True}
+    assert up.calls == [("check", True), "install"]
+    assert api.get_state()["update"]["version"] == "0.6.0"
+
+
+def test_api_update_disabled_in_dev(env):
+    api, *_ = env
+    assert api._updater is None
+    assert api.check_updates() == {"ok": False, "error": "Solo en la versión instalada"}
+    assert api.install_update()["ok"] is False
+    assert api.get_state()["update"] is None
