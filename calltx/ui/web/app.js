@@ -140,7 +140,7 @@ async function select(id) {
   if (!id) { d.innerHTML = `<div class="empty"><div><div class="ico">${icon("mic")}</div><b>Elige una grabación</b>Aquí verás la transcripción completa.</div></div>`; return; }
   const r = await api().get_recording(id);
   if (!r.ok) { d.innerHTML = `<div class="empty"><div><b>No disponible</b>${esc(r.error)}</div></div>`; return; }
-  const title = r.kind === "note" ? "Nota rápida" : `Llamada de ${r.app || "—"}`;
+  const title = r.kind === "note" ? "Nota rápida" : r.app === "Manual" ? "Llamada manual" : `Llamada de ${r.app || "—"}`;
   d.innerHTML = `
     <div class="dhead">
       <div><h2>${esc(title)}</h2><div class="meta"><span>${esc(r.full_date)}</span><span>${esc(r.start_end)}</span><span>${esc(r.duration)}</span></div></div>
@@ -215,6 +215,15 @@ function renderState(st) {
   $("#state-text").textContent = S.state.state === "preparing"
     ? `Preparando…${pct}` : (labels[S.state.state] || "") + (S.state.state !== "recording" ? pct : "");
   $("#state-keys").innerHTML = keysHtml(S.state.hotkey);
+  // Botón "Grabar llamada": mientras se graba cualquier cosa, la para (igual que el atajo).
+  const rec = S.state.state === "recording";
+  const cb = $("#call-btn");
+  cb.classList.toggle("primary", !rec);
+  cb.classList.toggle("rec", rec);
+  cb.disabled = S.state.state === "preparing";
+  $("#call-btn-text").textContent = rec ? "Parar grabación" : "Grabar llamada";
+  cb.title = rec ? "Para la grabación en curso" : "Graba tu micrófono y todo lo que suena en el equipo";
+  $("[data-icon]", cb).innerHTML = icon(rec ? "stop" : "phone");
   if (S.state.device) $("#device").textContent = S.state.device;
   if (S.state.version) $("#version").textContent = "Versión " + S.state.version + (S.state.frozen ? "" : " · desarrollo");
   if (S.state.frozen === false) {
@@ -299,6 +308,7 @@ document.addEventListener("keydown", async (e) => {
 }, true);
 
 // --- barra propia ---------------------------------------------------------
+$("#call-btn").onclick = async () => { const r = await api().toggle_call(); if (!r.ok) toast(esc(r.error)); };
 $("#tb-min").onclick = () => api().window_minimize();
 async function toggleMax() {
   setMaxIcon((await api().window_toggle_maximize()).maximized);

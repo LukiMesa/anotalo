@@ -226,3 +226,33 @@ def test_release_after_rejects_other_values(bad):
     api = Api(app, clipboard_set=lambda t: None, save_dialog=lambda n: None)
     assert api.set_setting("release_after_min", bad)["ok"] is False
     assert app.settings.release_after_min == 10
+
+
+def test_api_toggle_call_delegates(env):
+    api, app, *_ = env
+    calls = []
+    app.toggle_call = lambda: calls.append("call")
+    assert api.toggle_call() == {"ok": True}
+    assert calls == ["call"]
+
+
+def test_get_state_reports_kind(env):
+    api, app, *_ = env
+    app.session_kind = "manual"
+    assert api.get_state()["kind"] == "manual"
+    app.session_kind = None
+    assert api.get_state()["kind"] is None
+
+
+def test_platform_settings_editable(env):
+    api, app, *_ = env
+    for key in ("detect_zoom", "detect_whatsapp", "detect_slack", "detect_discord", "detect_browsers"):
+        assert api.set_setting(key, True) == {"ok": True}
+    assert "detect_meet" not in api.get_settings()
+
+
+def test_manual_call_shows_as_manual(env):
+    api, app, folder, *_ = env
+    (folder / "2026-10-23_1700_Llamada.md").write_text(CALL.replace("Teams", "Llamada"), encoding="utf-8")
+    rec = next(r for r in api.list_recordings() if r["id"] == "2026-10-23_1700_Llamada.md")
+    assert rec["kind"] == "call" and rec["app"] == "Manual"

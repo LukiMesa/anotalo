@@ -69,7 +69,8 @@ class TranscriptWriter:
 
     def _header(self, ended_at: datetime | None) -> str:
         lines = [
-            f"# Llamada — {self._app} — {self._started_at:%Y-%m-%d %H:%M}",
+            # La llamada grabada a mano se guarda como "Llamada": en el título se lee "Manual".
+            f"# Llamada — {'Manual' if self._app == 'Llamada' else self._app} — {self._started_at:%Y-%m-%d %H:%M}",
             "",
             f"- Inicio: {self._started_at:%H:%M:%S}",
         ]

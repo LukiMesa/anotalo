@@ -106,3 +106,15 @@ def test_long_merged_run_reaches_disk(tmp_path):
         w.add("Otros", i * 2.0, f"frase{i}", end_s=i * 2.0 + 1.5)
         w.flush_due()
     assert "frase0" in w.path.read_text(encoding="utf-8")
+
+
+def test_manual_call_header_says_manual(tmp_path):
+    from datetime import datetime
+
+    from calltx.transcript import TranscriptWriter
+
+    w = TranscriptWriter(tmp_path, "Llamada", datetime(2026, 11, 11, 11, 43), clock=lambda: 0.0)
+    path = w.close(datetime(2026, 11, 11, 11, 44))
+    first = path.read_text(encoding="utf-8").splitlines()[0]
+    assert first == "# Llamada — Manual — 2026-11-11 11:43"
+    assert path.name == "2026-11-11_1143_Llamada.md"

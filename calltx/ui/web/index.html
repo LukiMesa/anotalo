@@ -32,7 +32,8 @@
     <section class="list" aria-label="Lista de grabaciones">
       <div class="head">
         <div class="eyebrow">Historial</div>
-        <h1>Grabaciones</h1>
+        <div class="head-row"><h1>Grabaciones</h1>
+          <button class="btn primary sm" id="call-btn" title="Graba tu micrófono y todo lo que suena en el equipo"><span data-icon="phone"></span><span id="call-btn-text">Grabar llamada</span></button></div>
         <label class="search"><span data-icon="search"></span><span class="sr">Buscar</span>
           <input id="q" type="search" placeholder="Buscar en las transcripciones" autocomplete="off"></label>
         <div class="seg" role="group" aria-label="Filtrar">
@@ -65,7 +66,11 @@
     <div class="card"><div class="ch">Detección automática</div>
       <div class="set"><div class="l"><b>Grabar llamadas automáticamente</b><span>Empieza cuando una llamada usa el micrófono y para al colgar.</span></div><button class="switch" role="switch" data-setting="auto_mode" aria-label="Grabar llamadas automáticamente"></button></div>
       <div class="set"><div class="l"><b>Microsoft Teams</b><span>App de escritorio.</span></div><button class="switch" role="switch" data-setting="detect_teams" aria-label="Detectar Teams"></button></div>
-      <div class="set"><div class="l"><b>Llamadas en el navegador</b><span>Firefox, Chrome, Brave, Edge, Opera y Vivaldi.</span></div><button class="switch" role="switch" data-setting="detect_browsers" aria-label="Detectar llamadas en el navegador"></button></div>
+      <div class="set"><div class="l"><b>Zoom</b><span>App de escritorio.</span></div><button class="switch" role="switch" data-setting="detect_zoom" aria-label="Detectar Zoom"></button></div>
+      <div class="set"><div class="l"><b>WhatsApp</b><span>Solo llamadas: cuenta tras 30 s de micrófono, así las notas de voz no se graban.</span></div><button class="switch" role="switch" data-setting="detect_whatsapp" aria-label="Detectar WhatsApp"></button></div>
+      <div class="set"><div class="l"><b>Slack</b><span>Huddles y llamadas.</span></div><button class="switch" role="switch" data-setting="detect_slack" aria-label="Detectar Slack"></button></div>
+      <div class="set"><div class="l"><b>Discord</b><span>Desactivado por defecto: también se usa fuera de llamadas de trabajo.</span></div><button class="switch" role="switch" data-setting="detect_discord" aria-label="Detectar Discord"></button></div>
+      <div class="set"><div class="l"><b>Llamadas en el navegador</b><span>Firefox, Chrome, Brave, Edge, Opera y Vivaldi: cualquier web que use el micrófono (Meet, Teams, Zoom, WhatsApp Web…).</span></div><button class="switch" role="switch" data-setting="detect_browsers" aria-label="Detectar llamadas en el navegador"></button></div>
     </div>
     <div class="card"><div class="ch">Etiquetas</div>
       <div class="set"><div class="l"><b>Tu voz</b><span>Micrófono.</span><span class="err" data-err="label_me"></span></div><input class="text" data-text="label_me" aria-label="Etiqueta de tu voz"></div>

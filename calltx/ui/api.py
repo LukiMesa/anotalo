@@ -15,6 +15,7 @@ from typing import Callable
 
 from .. import __version__
 from ..paths import is_frozen
+from ..app import CALL_LABEL
 from ..library import Recording, Trash, list_recordings, parse_recording, to_readable
 
 log = logging.getLogger(__name__)
@@ -95,7 +96,8 @@ class Api:
         return {
             "id": rec.id,
             "kind": rec.kind,
-            "app": rec.app if rec.kind == "call" else "",
+            # Las llamadas grabadas a mano se guardan como "Llamada": se muestran como "Manual".
+            "app": ("Manual" if rec.app == CALL_LABEL else rec.app) if rec.kind == "call" else "",
             "title": "Nota rápida" if rec.kind == "note" else "Llamada",
             "date_label": self._date_label(rec),
             "time": rec.started_at.strftime("%H:%M") if has_time else "",
@@ -188,7 +190,17 @@ class Api:
             "device": self._device_info(),
             "version": __version__,
             "frozen": is_frozen(),
+            "kind": getattr(self._app, "session_kind", None),  # note | call | manual | None
         }
+
+    def toggle_call(self) -> dict:
+        """Botón "Grabar llamada": empieza una llamada manual o para lo que se esté grabando."""
+        try:
+            self._app.toggle_call()
+        except Exception as e:  # noqa: BLE001
+            log.exception("Error en grabar llamada")
+            return _err(str(e))
+        return {"ok": True}
 
     def get_settings(self) -> dict:
         s = self._app.settings

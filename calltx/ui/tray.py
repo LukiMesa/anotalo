@@ -59,6 +59,8 @@ class Tray:
                 lambda _: "Detener grabación" if app.state == "recording" else "Nueva nota rápida",
                 _bg(app.toggle),
             ),
+            pystray.MenuItem("Grabar llamada", _bg(app.toggle_call),
+                             visible=lambda _: app.state != "recording"),
             pystray.MenuItem("Grabar llamadas automáticamente", _bg(lambda: app.apply_setting("auto_mode", not app.settings.auto_mode)),
                              checked=lambda _: app.settings.auto_mode),
             pystray.Menu.SEPARATOR,

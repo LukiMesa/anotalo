@@ -62,6 +62,11 @@ h1 { font-family: var(--font-display); font-weight: 600; font-size: 22px; letter
 /* lista */
 .list { width: 380px; flex: none; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 .list .head { padding: 22px 20px 12px; }
+.head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.head-row .btn { margin: -10px 0 0; }
+.btn.sm { height: 32px; padding: 0 12px; font-size: 12.5px; }
+.btn.rec { background: var(--error); color: var(--surface); border-color: transparent; }
+.btn.rec:hover { filter: brightness(1.06); }
 .search { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--radius-md); color: var(--acero-oscuro); }
 .search:focus-within { border-color: var(--orbita); }
 .search input { flex: 1; border: 0; background: none; outline: none; color: var(--ink); min-width: 0; }
