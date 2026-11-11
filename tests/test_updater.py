@@ -219,3 +219,33 @@ def test_installing_that_never_closes_the_app_becomes_error():
     assert m.state == "error" and m.error
     m.install()  # se puede reintentar
     assert e.installed == ["setup-0.6.0.exe", "setup-0.6.0.exe"]
+
+
+NEW_URL = "https://github.com/LukiMesa/anotalo/releases/download/v1.0.0/Anotalo-Setup-1.0.0.exe"
+
+
+def test_fetch_latest_prefers_anotalo_asset():
+    data = {"tag_name": "v1.0.0", "name": "Anotalo 1.0.0", "assets": [
+        {"name": "Transcriptor-Setup-1.0.0.exe", "size": 1,
+         "browser_download_url": "https://github.com/LukiMesa/anotalo/releases/download/v1.0.0/Transcriptor-Setup-1.0.0.exe"},
+        {"name": "Anotalo-Setup-1.0.0.exe", "browser_download_url": NEW_URL, "size": 2, "digest": "sha256:" + "cd" * 32},
+    ]}
+    r = fetch_latest(fetch_json=lambda url: data)
+    assert (r.version, r.name, r.url, r.size, r.sha256) == ("1.0.0", "Anotalo-Setup-1.0.0.exe", NEW_URL, 2, "cd" * 32)
+
+
+def test_download_accepts_renamed_repo_and_asset(tmp_path):
+    rel = release(version="1.0.0", url=NEW_URL, name="Anotalo-Setup-1.0.0.exe")
+    assert download(rel, tmp_path, lambda p: None, opener=lambda url: Resp(PAYLOAD)).name == "Anotalo-Setup-1.0.0.exe"
+
+
+def test_download_still_rejects_lookalikes(tmp_path):
+    for url, name in (
+        (NEW_URL, "Transcriptor-Setup-1.0.0.exe"),  # el nombre no coincide con la URL
+        (NEW_URL.replace("LukiMesa/anotalo", "otro/anotalo"), "Anotalo-Setup-1.0.0.exe"),
+        (NEW_URL.replace("/anotalo/", "/anotalo-fake/"), "Anotalo-Setup-1.0.0.exe"),
+        (NEW_URL.replace("Anotalo-Setup", "Anotalo-Setup-x"), "Anotalo-Setup-x-1.0.0.exe"),
+    ):
+        with pytest.raises(UpdateError):
+            download(release(version="1.0.0", url=url, name=name), tmp_path, lambda p: None,
+                     opener=lambda url: pytest.fail("no debe descargar"))

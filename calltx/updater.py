@@ -23,9 +23,8 @@ from . import __version__
 
 log = logging.getLogger(__name__)
 
-REPO = "LukiMesa/call-transcriber"
+REPO = "LukiMesa/call-transcriber"  # tras renombrarlo a LukiMesa/anotalo, GitHub redirige esta ruta
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
-DOWNLOAD_PREFIX = f"https://github.com/{REPO}/releases/download/"
 USER_AGENT = f"Transcriptor/{__version__}"
 CHUNK = 1 << 16
 
@@ -71,17 +70,21 @@ def fetch_latest(fetch_json: Callable[[str], dict] = _fetch_json) -> Release | N
     """Última Release publicada con su instalador, o None si no tiene instalador."""
     data = fetch_json(API_LATEST)
     version = str(data["tag_name"]).lstrip("vV")
-    name = f"Transcriptor-Setup-{version}.exe"
-    asset = next((a for a in data.get("assets", []) if a.get("name") == name), None)
-    if asset is None:
+    assets = {a.get("name"): a for a in data.get("assets", [])}
+    # Anotalo (la app reescrita) reemplaza a Transcriptor: se prefiere su instalador
+    name = next((n for n in (f"Anotalo-Setup-{version}.exe", f"Transcriptor-Setup-{version}.exe") if n in assets), None)
+    if name is None:
         return None
+    asset = assets[name]
     digest = str(asset.get("digest") or "")
     sha = digest.split(":", 1)[1].lower() if digest.lower().startswith("sha256:") else None
     return Release(version, str(data.get("name") or data["tag_name"]), str(asset["browser_download_url"]),
                    name, int(asset["size"]), sha)
 
 
-_URL_OK = re.compile(re.escape(DOWNLOAD_PREFIX) + r"v?[0-9.]+/(Transcriptor-Setup-[0-9.]+\.exe)$")
+# Solo la página oficial (con su nombre actual o el antiguo) y solo el instalador de la app
+_URL_OK = re.compile(r"^https://github\.com/LukiMesa/(?:call-transcriber|anotalo)/releases/download/"
+                     r"v?[0-9.]+/((?:Transcriptor|Anotalo)-Setup-[0-9.]+\.exe)$")
 
 
 def download(release: Release, dest_dir: Path, progress: Callable[[float], None], opener=_open) -> Path:
