@@ -84,4 +84,15 @@ La versión de desarrollo usa sus propios ajustes (`%APPDATA%\CallTranscriber-de
 
 La versión sale de `calltx/__init__.py`. Requiere Inno Setup 6 (`winget install JRSoftware.InnoSetup`) y `gh` con sesión iniciada. Las apps instaladas ven la nueva versión en cuanto se publica la Release.
 
+## Code signing policy
+
+Free code signing provided by SignPath.io, certificate by SignPath Foundation
+
+Las versiones firmadas serán las de **Anotalo**, la reescritura de esta app que está en marcha, compiladas en GitHub Actions a partir de este repositorio.
+
+- Committers and reviewers: [LukiMesa](https://github.com/LukiMesa)
+- Approvers: [LukiMesa](https://github.com/LukiMesa)
+
+Cada versión firmada se aprueba a mano antes de firmarse. Qué datos usa la app: [política de privacidad](PRIVACY.md).
+
 Licencia MIT. Fuentes Sora, Instrument Sans y JetBrains Mono bajo SIL Open Font License (ver `calltx/ui/web/fonts/`).
