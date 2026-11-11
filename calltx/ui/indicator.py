@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 
 PillState = Literal["recording", "transcribing", "copied", "saved"]
 
-# Tokens del tema Noche
+# Tokens del tema Noche (calltx/ui/web/tokens.css)
 BG = (16, 20, 31, 240)  # --surface-sunken al 94 %
 BORDER = (46, 56, 80, 255)  # --line
 INK = (238, 243, 247, 255)  # --ink

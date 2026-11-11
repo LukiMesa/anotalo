@@ -27,8 +27,8 @@ class Platform:
 PLATFORMS: tuple[Platform, ...] = (
     Platform("teams", "Teams", "detect_teams", ("ms-teams.exe", "teams.exe"), ("msteams_",)),
     Platform("zoom", "Zoom", "detect_zoom", ("zoom.exe",)),
-    # WhatsApp usa el micro también al grabar notas de voz y su ventana no cambia (prueba del
-    # dueño): solo cuenta tras 30 s seguidos. Se pierden los primeros 30 s de la llamada.
+    # WhatsApp usa el micro también al grabar notas de voz y su ventana no cambia (prueba
+    # real): solo cuenta tras 30 s seguidos. Se pierden los primeros 30 s de la llamada.
     # Suena desde procesos de WebView2 fuera de su árbol: se graba el audio del equipo.
     Platform("whatsapp", "WhatsApp", "detect_whatsapp", ("whatsapp.root.exe", "whatsapp.exe"),
              ("5319275a.whatsappdesktop_",), audio="device", start_hold_s=30.0),

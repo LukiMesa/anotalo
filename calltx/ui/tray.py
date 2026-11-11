@@ -8,7 +8,7 @@ from typing import Callable
 import pystray
 from PIL import Image, ImageDraw
 
-# Colores: acero oscuro (inactivo), órbita (esperando), error (grabando)
+# Colores del tema: acero oscuro (inactivo), órbita (esperando), error (grabando)
 STATE_COLORS = {"idle": (107, 125, 146), "armed": (46, 197, 230), "recording": (255, 122, 122),
                 "preparing": (90, 104, 131)}
 STATE_TEXT = {"idle": "Inactivo", "armed": "Esperando llamada", "recording": "Grabando", "preparing": "Preparando…"}

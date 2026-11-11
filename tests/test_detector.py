@@ -89,7 +89,7 @@ def test_disabled_platform_ignored():
 
 
 def test_whatsapp_voice_message_ignored_call_detected():
-    # WhatsApp usa el micro también al grabar una nota de voz (~20 s en la prueba del dueño):
+    # WhatsApp usa el micro también al grabar una nota de voz (~20 s en una prueba real):
     # solo cuenta como llamada tras 30 s seguidos de micro.
     w = World()
     d = w.detector()

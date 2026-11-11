@@ -1,4 +1,4 @@
-"""Genera el icono de la app (colores de la app): calltx/ui/assets/icon.ico y icon.png.
+"""Genera el icono de la app (colores del tema): calltx/ui/assets/icon.ico y icon.png.
 
 Uso: python scripts/make_icon.py
 """
