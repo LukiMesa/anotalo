@@ -6,3 +6,5 @@ license.workspace = true
 
 [dependencies]
 anotalo-whisper = { path = "../whisper" }
+audioadapter-buffers = "5.1"
+rubato = "5.0.1"
