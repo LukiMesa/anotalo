@@ -168,56 +168,120 @@ fn first_appearance(pred: &[usize]) -> Vec<usize> {
         .collect()
 }
 
+/// Posición de d(i, j), con i < j, en la mitad de arriba de la matriz guardada fila a fila.
+fn upper(n: usize, i: usize, j: usize) -> usize {
+    i * (2 * n - i - 1) / 2 + j - i - 1
+}
+
+/// Cuántas columnas de la matriz de distancias se calculan a la vez.
+const LANES: usize = 16;
+
+/// La mitad de arriba de la matriz de distancias 1 − coseno, fila a fila. Cada producto
+/// escalar suma en el mismo orden que `dot` (da lo mismo, bit a bit), pero por bloques de
+/// `LANES` columnas: sus huellas, traspuestas (una fila de `LANES` por dimensión), caben en la
+/// caché y las `LANES` sumas de cada fila avanzan a la vez.
+fn upper_distances(embs: &[&[f32]]) -> Vec<f64> {
+    let n = embs.len();
+    let dim = embs.first().map_or(0, |e| e.len());
+    let mut d = vec![0f64; n * n.saturating_sub(1) / 2];
+    let mut block = vec![[0f64; LANES]; dim];
+    for j0 in (1..n).step_by(LANES) {
+        let j1 = (j0 + LANES).min(n);
+        block.fill([0.0; LANES]);
+        for (l, e) in embs[j0..j1].iter().enumerate() {
+            for (row, x) in block.iter_mut().zip(*e) {
+                row[l] = f64::from(*x);
+            }
+        }
+        // las filas con alguna columna j > i en el bloque
+        for (i, e) in embs[..j1 - 1].iter().enumerate() {
+            let mut s = [0f64; LANES];
+            for (x, ys) in e.iter().zip(&block) {
+                let x = f64::from(*x);
+                for (s, y) in s.iter_mut().zip(ys) {
+                    *s += x * y;
+                }
+            }
+            let from = j0.max(i + 1);
+            let at = upper(n, i, from);
+            for (o, s) in d[at..at + j1 - from].iter_mut().zip(&s[from - j0..]) {
+                *o = 1.0 - s;
+            }
+        }
+    }
+    d
+}
+
 /// Enlace medio con distancia 1 − coseno (Lance–Williams), uniendo mientras la distancia más
 /// pequeña no pase de `END_DIST` (como `fcluster(..., t, criterion="distance")` de scipy).
+///
+/// Cadena de vecinos más cercanos, como `linkage` de scipy: el enlace medio es reducible (el
+/// grupo unido nunca queda más cerca de un tercero que el más cercano de los dos), así que da el
+/// mismo árbol que unir siempre el par más cercano, pero en O(n²) y no en O(n³). Un grupo cuyo
+/// vecino más cercano ya pasa de `END_DIST` no se unirá a nada: se cierra. Solo se guarda la
+/// mitad de arriba de la matriz de distancias.
 fn average_linkage(embs: &[&[f32]]) -> Vec<usize> {
     let n = embs.len();
     if n <= 1 {
         return vec![0; n];
     }
-    let mut d = vec![0f64; n * n];
-    for i in 0..n {
-        for j in i + 1..n {
-            let v = 1.0 - dot(embs[i], embs[j]);
-            d[i * n + j] = v;
-            d[j * n + i] = v;
+    let at = |i: usize, j: usize| {
+        if i < j {
+            upper(n, i, j)
+        } else {
+            upper(n, j, i)
         }
-    }
+    };
+    let mut d = upper_distances(embs);
     let mut size = vec![1usize; n];
-    let mut active = vec![true; n];
+    // los grupos que aún pueden unirse a otro
+    let mut open = vec![true; n];
+    let mut left = n;
     let mut owner: Vec<usize> = (0..n).collect();
+    let mut chain: Vec<usize> = Vec::with_capacity(n);
     let limit = f64::from(END_DIST);
-    loop {
-        let mut best: Option<(usize, usize, f64)> = None;
-        for i in 0..n {
-            if !active[i] {
-                continue;
-            }
-            for j in i + 1..n {
-                if active[j] && best.is_none_or(|(_, _, b)| d[i * n + j] < b) {
-                    best = Some((i, j, d[i * n + j]));
-                }
+    while left > 1 {
+        if chain.is_empty() {
+            chain.extend(open.iter().position(|&o| o));
+        }
+        let x = chain[chain.len() - 1];
+        // el vecino más cercano de x; en un empate gana el anterior de la cadena (si no, la
+        // cadena podría dar vueltas) y después el primer índice
+        let prev = chain.len().checked_sub(2).map(|p| chain[p]);
+        let (mut y, mut best) = prev.map_or((x, f64::INFINITY), |p| (p, d[at(x, p)]));
+        for i in (0..n).filter(|&i| open[i] && i != x) {
+            let v = d[at(x, i)];
+            if v < best {
+                (y, best) = (i, v);
             }
         }
-        let Some((a, b, dist)) = best else { break };
-        if dist > limit {
-            break;
+        if best > limit {
+            // nada queda a `END_DIST` o menos de x, y unir otros grupos no los acerca: x ya no
+            // cambia
+            open[x] = false;
+            left -= 1;
+            chain.pop();
+            continue;
         }
-        // b se une a a
-        for k in 0..n {
-            if active[k] && k != a && k != b {
-                let v = (size[a] as f64 * d[a * n + k] + size[b] as f64 * d[b * n + k])
-                    / (size[a] + size[b]) as f64;
-                d[a * n + k] = v;
-                d[k * n + a] = v;
-            }
+        if Some(y) != prev {
+            chain.push(y);
+            continue;
+        }
+        // x e y son vecinos mutuos: el mayor se une al menor
+        chain.truncate(chain.len() - 2);
+        let (a, b) = (x.min(y), x.max(y));
+        for k in (0..n).filter(|&k| open[k] && k != a && k != b) {
+            let (da, db) = (d[at(a, k)], d[at(b, k)]);
+            let v = (size[a] as f64 * da + size[b] as f64 * db) / (size[a] + size[b]) as f64;
+            // en coma flotante la media puede quedar un ulp por debajo de la menor de las dos:
+            // acotada, el enlace sigue siendo reducible y la cadena nunca vuelve atrás
+            d[at(a, k)] = v.max(da.min(db));
         }
         size[a] += size[b];
-        active[b] = false;
-        for o in owner.iter_mut() {
-            if *o == b {
-                *o = a;
-            }
+        open[b] = false;
+        left -= 1;
+        for o in owner.iter_mut().filter(|o| **o == b) {
+            *o = a;
         }
     }
     first_appearance(&owner)

@@ -93,3 +93,14 @@ fn test_end_of_call_is_fast_for_an_hour() {
         assert_eq!(l.len(), 900);
     }
 }
+
+#[test]
+fn test_end_of_call_is_fast_for_three_hours() {
+    // una reunión de 3 h: 3000 segmentos de 3,6 s, cuatro voces; casi todo se une
+    let (e, d) = synthetic(&[(0, 750, 3.6), (1, 750, 3.6), (2, 750, 3.6), (3, 750, 3.6)]);
+    let t = std::time::Instant::now();
+    let l = end_of_call(&e, &d);
+    eprintln!("3000 segmentos: {:?}", t.elapsed());
+    assert!(t.elapsed().as_secs_f64() < 3.0, "{:?}", t.elapsed());
+    assert_eq!(l.len(), 3000);
+}
