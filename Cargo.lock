@@ -37,6 +37,7 @@ dependencies = [
  "audioadapter-buffers",
  "chrono",
  "hound",
+ "log",
  "regex",
  "rubato",
  "serde_json",
