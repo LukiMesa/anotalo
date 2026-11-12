@@ -12,9 +12,11 @@ path = "src/main.rs"
 anotalo-core = { path = "../core" }
 anotalo-whisper = { path = "../whisper" }
 anotalo-winaudio = { path = "../winaudio" }
+anotalo-winsys = { path = "../winsys" }
 fontdue = "0.9"
 hound = "3"
 log = "0.4"
+serde_json = "1"
 tiny-skia = "0.11"
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
@@ -23,6 +25,7 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_HiDpi",
     "Win32_System_Console",
     "Win32_System_ProcessStatus",
+    "Win32_System_Shutdown",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -34,6 +37,5 @@ winresource = "0.1"
 
 [dev-dependencies]
 regex = "1"
-serde_json = "1"
 tempfile = "3"
 unicode-normalization = "0.1"

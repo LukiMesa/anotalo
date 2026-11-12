@@ -9,11 +9,12 @@ use anotalo_core::routing::PLATFORMS;
 use anotalo_whisper::{DeviceKind, LoadOptions, Model, Params, devices};
 
 mod record;
-#[allow(dead_code)] // temporal: la app de la bandeja (tarea 12 del M2a) lo conecta
 mod shell;
+mod tray_app;
 use record::RecordArgs;
 
 const USAGE: &str = "Uso:
+  anotalo [--minimized]            (la app, en la bandeja del sistema)
   anotalo --version
   anotalo selftest [--model <modelo>] [--wav <audio.wav>]
   anotalo record --out <carpeta> [--app <etiqueta>] [--platform <teams|zoom|…>] [--process <exe>]
@@ -27,6 +28,8 @@ fn version_line() -> String {
 
 #[derive(Debug)]
 enum Command {
+    /// La app de la bandeja (con o sin `--minimized`: aún no hay ventana que mostrar).
+    Tray,
     Version,
     Selftest {
         model: Option<PathBuf>,
@@ -37,6 +40,8 @@ enum Command {
 
 fn parse_args(args: &[String]) -> Result<Command, String> {
     match args.first().map(String::as_str) {
+        None => Ok(Command::Tray),
+        Some("--minimized") if args.len() == 1 => Ok(Command::Tray),
         Some("--version" | "-V") if args.len() == 1 => Ok(Command::Version),
         Some("selftest") => {
             let (mut model, mut wav) = (None, None);
@@ -259,6 +264,7 @@ fn selftest(model: Option<&Path>, wav: Option<&Path>) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match parse_args(&args) {
+        Ok(Command::Tray) => tray_app::run(),
         Ok(Command::Version) => {
             println!("{}", version_line());
             ExitCode::SUCCESS
@@ -313,6 +319,18 @@ mod tests {
         }
         assert!(super::parse_args(&s(&["selftest", "--model"])).is_err());
         assert!(super::parse_args(&s(&["otra-cosa"])).is_err());
+    }
+
+    #[test]
+    fn no_arguments_or_minimized_start_the_tray_app() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert!(matches!(super::parse_args(&[]), Ok(super::Command::Tray)));
+        assert!(matches!(
+            super::parse_args(&s(&["--minimized"])),
+            Ok(super::Command::Tray)
+        ));
+        assert!(super::parse_args(&s(&["--minimized", "x"])).is_err());
+        assert!(super::USAGE.lines().nth(1).unwrap().contains("--minimized"));
     }
 
     #[test]

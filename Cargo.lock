@@ -39,6 +39,7 @@ dependencies = [
  "anotalo-core",
  "anotalo-whisper",
  "anotalo-winaudio",
+ "anotalo-winsys",
  "fontdue",
  "hound",
  "log",

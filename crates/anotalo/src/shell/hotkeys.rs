@@ -30,6 +30,7 @@ impl Hotkeys {
         }
     }
 
+    #[allow(dead_code)] // M3: la ventana de ajustes cambia los atajos
     pub fn spec(&self, id: HotkeyId) -> Option<&str> {
         self.specs.get(&id).map(|(s, _, _)| s.as_str())
     }
@@ -47,6 +48,7 @@ impl Hotkeys {
     }
 
     /// Cambia un atajo en vivo. Si el nuevo no se puede registrar, se queda el anterior.
+    #[allow(dead_code)] // M3: la ventana de ajustes cambia los atajos
     pub fn rebind(&mut self, id: HotkeyId, spec: &str) -> Result<(), String> {
         let (mods, vk) = validate_hotkey(spec)?;
         let old = self.specs.get(&id).cloned();
@@ -70,6 +72,7 @@ impl Hotkeys {
     }
 
     /// Vuelve a registrar los atajos soltados con `pause`.
+    #[allow(dead_code)] // M3: la ventana de ajustes cambia los atajos
     pub fn resume(&mut self) {
         let all: Vec<(HotkeyId, u32, u32)> = self
             .specs

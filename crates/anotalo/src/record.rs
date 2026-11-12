@@ -150,7 +150,7 @@ fn describe(p: Placement, devices: &[anotalo_whisper::Device]) -> String {
     }
 }
 
-fn vad_factory() -> Box<dyn Fn() -> VadFn + Send> {
+pub(crate) fn vad_factory() -> Box<dyn Fn() -> VadFn + Send> {
     Box::new(|| {
         let mut vad = Vad::new().expect("el detector de voz ya cargó una vez");
         Box::new(move |frame: &[f32]| <&[f32; FRAME]>::try_from(frame).map_or(0.0, |f| vad.prob(f)))

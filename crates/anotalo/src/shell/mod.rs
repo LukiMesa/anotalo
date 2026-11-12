@@ -4,3 +4,4 @@ pub mod hotkeys;
 pub mod indicator;
 pub mod pill;
 pub mod tray;
+pub mod window;

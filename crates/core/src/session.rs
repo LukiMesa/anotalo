@@ -314,6 +314,12 @@ impl CallSession {
         self.shutdown()
     }
 
+    /// Como `stop`, y además lo dicho (para copiarlo), ya con las últimas frases.
+    pub fn stop_with_text(mut self) -> io::Result<(PathBuf, String)> {
+        let path = self.shutdown()?;
+        Ok((path, self.plain_text()))
+    }
+
     fn shutdown(&mut self) -> io::Result<PathBuf> {
         let Some(ticker) = self.ticker.take() else {
             return Ok(self.path().to_path_buf());

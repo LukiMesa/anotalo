@@ -1,6 +1,8 @@
 //! Icono en la bandeja del sistema (port de calltx/ui/tray.py): el icono de la app con un punto del
 //! color del estado, su menú y el texto al pasar el ratón.
 
+use std::cell::Cell;
+
 use anotalo_core::app::State;
 use tiny_skia::{
     Color, FillRule, FilterQuality, Paint, PathBuilder, Pixmap, PixmapPaint, Transform,
@@ -34,7 +36,7 @@ pub enum TrayCommand {
 }
 
 impl TrayCommand {
-    fn from_id(id: i32) -> Option<TrayCommand> {
+    pub fn from_id(id: i32) -> Option<TrayCommand> {
         [
             TrayCommand::ToggleNote,
             TrayCommand::RecordCall,
@@ -224,10 +226,11 @@ fn tip_buf(text: &str) -> [u16; 128] {
     buf
 }
 
-/// El icono en la bandeja. Vive en el hilo de la ventana de mensajes.
+/// El icono en la bandeja. Vive en el hilo de la ventana de mensajes. Sus métodos toman `&self`:
+/// el menú abre un bucle de mensajes propio, y los avisos que llegan mientras pueden actualizarlo.
 pub struct Tray {
     hwnd: HWND,
-    icon: HICON,
+    icon: Cell<HICON>,
 }
 
 impl Tray {
@@ -249,10 +252,13 @@ impl Tray {
             let _ = unsafe { DestroyIcon(icon) };
             return Err("no se pudo añadir el icono a la bandeja".into());
         }
-        Ok(Tray { hwnd, icon })
+        Ok(Tray {
+            hwnd,
+            icon: Cell::new(icon),
+        })
     }
 
-    pub fn update(&mut self, state: State, preparing_pct: Option<u8>) {
+    pub fn update(&self, state: State, preparing_pct: Option<u8>) {
         let Ok(icon) = make_hicon(state) else { return };
         let data = NOTIFYICONDATAW {
             cbSize: size_of::<NOTIFYICONDATAW>() as u32,
@@ -266,7 +272,7 @@ impl Tray {
         // SAFETY: ver new; el icono anterior se destruye cuando ya no se usa.
         unsafe {
             let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
-            let _ = DestroyIcon(std::mem::replace(&mut self.icon, icon));
+            let _ = DestroyIcon(self.icon.replace(icon));
         }
     }
 
@@ -319,7 +325,7 @@ impl Drop for Tray {
         // SAFETY: quita el icono propio y lo destruye.
         unsafe {
             let _ = Shell_NotifyIconW(NIM_DELETE, &data);
-            let _ = DestroyIcon(self.icon);
+            let _ = DestroyIcon(self.icon.get());
         }
     }
 }
@@ -442,7 +448,7 @@ mod tests {
             )
             .unwrap()
         };
-        let mut tray = Tray::new(hwnd).expect("icono en la bandeja");
+        let tray = Tray::new(hwnd).expect("icono en la bandeja");
         for state in [State::Armed, State::Recording, State::Preparing] {
             tray.update(state, Some(42));
             std::thread::sleep(std::time::Duration::from_millis(300));

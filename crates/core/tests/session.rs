@@ -258,6 +258,16 @@ fn test_plain_text_session() {
     sess.stop().unwrap();
 }
 
+/// Al parar sin esperar, lo dicho aún está por transcribir: el texto se toma tras vaciarlo.
+#[test]
+fn test_stop_with_text_includes_flushed_lines() {
+    let d = tempfile::tempdir().unwrap();
+    let sess = start(d.path(), FakeSource::new(&[0.5]), None, None, None, None);
+    let (path, text) = sess.stop_with_text().unwrap();
+    assert_eq!(text, "texto");
+    assert!(read(&path).contains("- Duración:"));
+}
+
 #[test]
 fn test_level_callback_throttled() {
     let d = tempfile::tempdir().unwrap();
