@@ -173,3 +173,16 @@ fn force_cut_in_a_short_pause_keeps_the_next_start_exact() {
         segs[1].start_s
     );
 }
+
+#[test]
+fn a_gap_does_not_trim_the_speech_before_it() {
+    // 1 s de voz y el siguiente paquete 0,8 s después: la captura de sistema no manda paquetes en
+    // silencio. El hueco cierra la frase, pero no se lleva voz (en Python se perdían ~0,55 s).
+    let segs = run(
+        &[(0.0, tone(1.0)), (1.8, tone(1.0))],
+        SegmenterConfig::default(),
+    );
+    assert_eq!(segs.len(), 2);
+    let kept = segs[0].audio.len() as f64 / SR;
+    assert!(kept >= 0.95, "se recortó voz: quedan {kept:.3} s de 1 s");
+}

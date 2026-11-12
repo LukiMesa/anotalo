@@ -62,6 +62,8 @@ pub struct Segmenter {
     seg_start: f64,
     voiced_s: f64,
     silence_run: f64,
+    /// Tramas silenciosas al final de la frase (sin contar los huecos, que no tienen tramas).
+    silent_tail: usize,
     in_speech: bool,
     out: Vec<Segment>,
 }
@@ -85,6 +87,7 @@ impl Segmenter {
             seg_start: 0.0,
             voiced_s: 0.0,
             silence_run: 0.0,
+            silent_tail: 0,
             in_speech: false,
             out: Vec::new(),
         }
@@ -95,6 +98,7 @@ impl Segmenter {
         self.seg_start = 0.0;
         self.voiced_s = 0.0;
         self.silence_run = 0.0;
+        self.silent_tail = 0;
         self.in_speech = false;
     }
 
@@ -186,6 +190,7 @@ impl Segmenter {
                 self.frames.push(frame);
                 self.voiced_s = FRAME_S;
                 self.silence_run = 0.0;
+                self.silent_tail = 0;
             } else {
                 if self.preroll.len() == self.preroll_cap {
                     self.preroll.pop_front();
@@ -197,8 +202,10 @@ impl Segmenter {
         self.frames.push(frame);
         if p < self.off {
             self.silence_run += FRAME_S;
+            self.silent_tail += 1;
         } else {
             self.silence_run = 0.0;
+            self.silent_tail = 0;
             self.voiced_s += FRAME_S;
         }
         if self.silence_run >= self.silence_s {
@@ -211,8 +218,9 @@ impl Segmenter {
     fn finish(&mut self, keep_speaking: bool) {
         let mut frames = std::mem::take(&mut self.frames);
         let total = frames.len();
-        // recorta el silencio final dejando un pequeño margen
-        let silent_frames = total.min((self.silence_run / FRAME_S + 1e-9) as usize);
+        // Recorta el silencio final dejando un pequeño margen. Solo tramas silenciosas de verdad:
+        // el tiempo de un hueco sin paquetes no tiene tramas (Python recortaba voz aquí).
+        let silent_frames = total.min(self.silent_tail);
         let keep = (TRAILING_KEEP_S / FRAME_S).round() as usize;
         let drop = silent_frames.saturating_sub(keep);
         frames.truncate(total - drop);
