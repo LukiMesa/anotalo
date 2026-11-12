@@ -11,6 +11,44 @@ use serde_json::{Map, Value};
 
 use crate::paths::{Profile, data_dir, data_dir_in, default_output_dir, legacy_data_dir_in};
 
+/// Llama a `$cb!` con todos los campos conocidos de `Settings`, en orden.
+macro_rules! with_settings_fields {
+    ($cb:ident) => {
+        $cb!(
+            model,
+            language,
+            device,
+            compute_type,
+            label_me,
+            label_others,
+            hotkey,
+            auto_mode,
+            output_dir,
+            mic_device,
+            silence_ms,
+            max_segment_s,
+            min_segment_ms,
+            save_audio,
+            copy_on_stop,
+            show_indicator,
+            autostart,
+            autostart_configured,
+            detect_teams,
+            detect_zoom,
+            detect_whatsapp,
+            detect_slack,
+            detect_discord,
+            detect_browsers,
+            release_after_min,
+            update_notified,
+            last_run_version,
+            hotkey_mark,
+            igpu_faster,
+            igpu_name,
+        )
+    };
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Settings {
     /// auto = large-v3-turbo con GPU, small con procesador.
@@ -92,6 +130,24 @@ impl Settings {
         }
     }
 
+    /// Cambia un ajuste por su nombre (desde la ventana). Error si no existe o si el valor no es
+    /// del tipo del ajuste.
+    pub fn set_field(&mut self, key: &str, value: Value) -> Result<(), String> {
+        macro_rules! set {
+            ($($field:ident),* $(,)?) => {
+                match key {
+                    $(stringify!($field) => {
+                        self.$field = serde_json::from_value(value)
+                            .map_err(|e| format!("Valor no válido para {key}: {e}"))?;
+                        Ok(())
+                    })*
+                    _ => Err(format!("Ajuste desconocido: {key}")),
+                }
+            };
+        }
+        with_settings_fields!(set)
+    }
+
     /// El interruptor de detección de una plataforma (`Platform::setting`).
     pub fn detect_enabled(&self, setting: &str) -> bool {
         match setting {
@@ -159,38 +215,7 @@ pub fn load_settings(path: &Path, p: Profile) -> Settings {
             }
         )*};
     }
-    take!(
-        model,
-        language,
-        device,
-        compute_type,
-        label_me,
-        label_others,
-        hotkey,
-        auto_mode,
-        output_dir,
-        mic_device,
-        silence_ms,
-        max_segment_s,
-        min_segment_ms,
-        save_audio,
-        copy_on_stop,
-        show_indicator,
-        autostart,
-        autostart_configured,
-        detect_teams,
-        detect_zoom,
-        detect_whatsapp,
-        detect_slack,
-        detect_discord,
-        detect_browsers,
-        release_after_min,
-        update_notified,
-        last_run_version,
-        hotkey_mark,
-        igpu_faster,
-        igpu_name,
-    );
+    with_settings_fields!(take);
     s.extra = map;
     s
 }

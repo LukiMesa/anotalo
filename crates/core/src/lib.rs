@@ -1,5 +1,6 @@
 //! Lógica de Anotalo sin hardware: audio a 16 kHz, detección de voz, frases, filtro,
 //! transcripción a Markdown, modelos y la sesión de grabación.
+pub mod app;
 pub mod applog;
 pub mod config;
 pub mod detector;
