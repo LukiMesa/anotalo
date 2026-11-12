@@ -2,6 +2,7 @@
 //! y memoria de voces.
 
 pub mod cluster;
+pub mod diarizer;
 pub mod embed;
 pub mod fbank;
 pub mod memory;
