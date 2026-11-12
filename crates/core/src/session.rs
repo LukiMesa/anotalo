@@ -311,7 +311,9 @@ impl CallSession {
             let _ = worker.join();
         }
         if !self.transcriber.wait_idle(IDLE_TIMEOUT) {
-            log::warn!("Se cierra la transcripción con frases sin transcribir");
+            // lo que quede ya no llegaría al archivo (se cierra ahora): no se gasta más tiempo en ello
+            let dropped = self.transcriber.cancel_pending();
+            log::warn!("Se cierra la transcripción con {dropped} frases sin transcribir");
         }
         self.shared.writer.close(chrono::Local::now().naive_local())
     }

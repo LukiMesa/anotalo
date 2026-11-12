@@ -170,6 +170,14 @@ impl Transcriber {
         true
     }
 
+    /// Descarta las frases que esperan en la cola (no la que se está transcribiendo) y dice cuántas.
+    /// Para cerrar a tiempo cuando el procesador no da abasto.
+    pub fn cancel_pending(&self) -> usize {
+        let dropped = std::mem::take(&mut self.shared.queue.lock().unwrap().jobs).len();
+        self.shared.changed.notify_all();
+        dropped
+    }
+
     /// Transcribe lo que quede en la cola y para (libera el modelo).
     pub fn stop(mut self) {
         self.shutdown();

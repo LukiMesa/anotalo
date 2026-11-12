@@ -291,3 +291,25 @@ fn igpu_used_only_when_strictly_faster() {
         );
     }
 }
+
+#[test]
+fn cancel_pending_drops_queued_phrases_so_stop_is_bounded() {
+    // La primera frase es rápida; las demás tardan 1 s cada una (un procesador lento).
+    let m = FakeAsr {
+        slow_after_first: true,
+        ..FakeAsr::new()
+    };
+    let t = start(m);
+    let (tx, rx) = mpsc::channel();
+    for _ in 0..4 {
+        let tx = tx.clone();
+        t.submit(seg(0.5, "Yo"), Box::new(move |_, _| tx.send(()).unwrap()));
+    }
+    drop(tx);
+    std::thread::sleep(Duration::from_millis(300)); // la 1.ª hecha, la 2.ª en curso
+    assert_eq!(t.cancel_pending(), 2);
+    let t0 = std::time::Instant::now();
+    t.stop();
+    assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+    assert_eq!(rx.iter().count(), 2);
+}
