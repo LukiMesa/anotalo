@@ -1,5 +1,6 @@
 # Comprueba de qué DLL depende cada exe (spec §5.1): CRT estático (sin MSVCP/VCRUNTIME/VCOMP/UCRT),
-# vulkan-1.dll solo de carga diferida y, por lo demás, únicamente DLL de Windows.
+# vulkan-1.dll solo de carga diferida y, por lo demás, únicamente DLL de Windows, cargadas solo de
+# System32 (/DEPENDENTLOADFLAG:0x800: una DLL con el mismo nombre junto al exe no se carga).
 # Uso: .\scripts\check-deps.ps1 -Exe target\release\anotalo.exe[,target\release\examples\bench.exe]
 param([Parameter(Mandatory = $true)][string[]]$Exe)
 $ErrorActionPreference = "Stop"
@@ -12,7 +13,8 @@ if (-not $dumpbin) { throw "No se encontró dumpbin.exe (Build Tools de Visual S
 # DLL de Windows permitidas (todas vienen con el sistema)
 $allowed = @(
     "KERNEL32.dll", "USER32.dll", "GDI32.dll", "ADVAPI32.dll", "SHELL32.dll", "ole32.dll", "OLEAUT32.dll",
-    "WS2_32.dll", "bcrypt.dll", "bcryptprimitives.dll", "ntdll.dll", "CRYPT32.dll", "Secur32.dll", "dbghelp.dll"
+    "WS2_32.dll", "bcrypt.dll", "bcryptprimitives.dll", "ntdll.dll", "CRYPT32.dll", "Secur32.dll", "dbghelp.dll",
+    "combase.dll", "mmdevapi.dll", "propsys.dll"
 )
 $crt = '^(MSVCP|VCRUNTIME|VCOMP|api-ms-win-crt-)'
 
@@ -42,6 +44,9 @@ foreach ($file in $Exe) {
         if ($dll -ine "vulkan-1.dll") { $problems += "${file}: $dll no debería ser de carga diferida" }
     }
     if (-not ($delay | Where-Object { $_ -ieq "vulkan-1.dll" })) { $problems += "${file}: falta vulkan-1.dll entre las de carga diferida" }
+    $flag = (& $dumpbin.FullName /nologo /loadconfig $file) | Where-Object { $_ -match '^\s*([0-9A-Fa-f]+) Dependent Load Flag' } | ForEach-Object { [Convert]::ToInt32($Matches[1], 16) }
+    "Dependent Load Flag: $flag"
+    if (-not ($flag -band 0x800)) { $problems += "${file}: falta /DEPENDENTLOADFLAG:0x800 (las DLL importadas deben cargarse solo de System32)" }
 }
 
 if ($problems) { $problems | ForEach-Object { "FALLO: $_" }; exit 1 }

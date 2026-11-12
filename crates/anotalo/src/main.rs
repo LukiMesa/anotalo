@@ -4,10 +4,19 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
+use anotalo_core::models::CATALOG;
+use anotalo_core::routing::PLATFORMS;
 use anotalo_whisper::{DeviceKind, LoadOptions, Model, Params, devices};
 
-const USAGE: &str =
-    "Uso: anotalo --version | anotalo selftest [--model <modelo>] [--wav <audio.wav>]";
+mod record;
+use record::RecordArgs;
+
+const USAGE: &str = "Uso:
+  anotalo --version
+  anotalo selftest [--model <modelo>] [--wav <audio.wav>]
+  anotalo record --out <carpeta> [--app <etiqueta>] [--platform <teams|zoom|…>] [--process <exe>]
+                 [--mic-only] [--seconds <n>] [--model <auto|large-v3-turbo|…>]
+                 [--device <auto|gpu|cpu>] [--language <es>]";
 
 /// "Anotalo <versión>", lo que imprime `--version`.
 fn version_line() -> String {
@@ -21,6 +30,7 @@ enum Command {
         model: Option<PathBuf>,
         wav: Option<PathBuf>,
     },
+    Record(RecordArgs),
 }
 
 fn parse_args(args: &[String]) -> Result<Command, String> {
@@ -41,7 +51,122 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             }
             Ok(Command::Selftest { model, wav })
         }
+        Some("record") => parse_record(&args[1..]).map(Command::Record),
         _ => Err(USAGE.to_string()),
+    }
+}
+
+fn parse_record(args: &[String]) -> Result<RecordArgs, String> {
+    let mut r = RecordArgs {
+        out: PathBuf::new(),
+        app: None,
+        platform: None,
+        process: None,
+        mic_only: false,
+        seconds: None,
+        model: "auto".into(),
+        device: "auto".into(),
+        language: "es".into(),
+    };
+    let mut out = None;
+    let mut rest = args.iter();
+    while let Some(flag) = rest.next() {
+        if flag == "--mic-only" {
+            r.mic_only = true;
+            continue;
+        }
+        let value = rest
+            .next()
+            .ok_or_else(|| {
+                format!(
+                    "Falta el valor de {flag}.
+{USAGE}"
+                )
+            })?
+            .clone();
+        match flag.as_str() {
+            "--out" => out = Some(PathBuf::from(value)),
+            "--app" => r.app = Some(value),
+            "--process" => r.process = Some(value),
+            "--language" => r.language = value,
+            "--platform" if PLATFORMS.iter().any(|p| p.key == value) => r.platform = Some(value),
+            "--platform" => {
+                let keys: Vec<&str> = PLATFORMS.iter().map(|p| p.key).collect();
+                return Err(format!(
+                    "Plataforma desconocida: {value} (válidas: {})",
+                    keys.join(", ")
+                ));
+            }
+            "--seconds" => {
+                let n = value.parse::<u64>().ok().filter(|n| *n > 0);
+                r.seconds =
+                    Some(n.ok_or_else(|| {
+                        format!("--seconds necesita un número de segundos: {value}")
+                    })?);
+            }
+            "--model" if value == "auto" || CATALOG.iter().any(|m| m.setting == value) => {
+                r.model = value
+            }
+            "--model" => {
+                let names: Vec<&str> = CATALOG.iter().map(|m| m.setting).collect();
+                return Err(format!(
+                    "Modelo desconocido: {value} (válidos: auto, {})",
+                    names.join(", ")
+                ));
+            }
+            "--device" if matches!(value.as_str(), "auto" | "gpu" | "cpu") => r.device = value,
+            "--device" => {
+                return Err(format!(
+                    "Dispositivo desconocido: {value} (auto, gpu o cpu)"
+                ));
+            }
+            other => {
+                return Err(format!(
+                    "Opción desconocida: {other}.
+{USAGE}"
+                ));
+            }
+        }
+    }
+    r.out = out.ok_or_else(|| {
+        format!(
+            "Falta --out <carpeta>.
+{USAGE}"
+        )
+    })?;
+    Ok(r)
+}
+
+/// Mensajes de Anotalo por la consola de errores ("Yo: …", "Otros: …", avisos). Con
+/// `ANOTALO_LOG=debug`, también los de depuración.
+struct ConsoleLog;
+
+impl log::Log for ConsoleLog {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= log::max_level() && m.target().starts_with("anotalo")
+    }
+
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            match r.level() {
+                log::Level::Error => eprintln!("Error: {}", r.args()),
+                log::Level::Warn => eprintln!("Aviso: {}", r.args()),
+                _ => eprintln!("{}", r.args()),
+            }
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn init_log() {
+    if log::set_logger(&ConsoleLog).is_ok() {
+        let debug = std::env::var("ANOTALO_LOG").is_ok_and(|v| v == "debug");
+        log::set_max_level(if debug {
+            log::LevelFilter::Debug
+        } else {
+            log::LevelFilter::Info
+        });
     }
 }
 
@@ -143,6 +268,16 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Ok(Command::Record(r)) => {
+            init_log();
+            match record::record(&r) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         Err(usage) => {
             eprintln!("{usage}");
             ExitCode::from(2)
@@ -176,5 +311,77 @@ mod tests {
         }
         assert!(super::parse_args(&s(&["selftest", "--model"])).is_err());
         assert!(super::parse_args(&s(&["otra-cosa"])).is_err());
+    }
+
+    #[test]
+    fn parses_record() {
+        use super::{Command, RecordArgs, parse_args};
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let all = parse_args(&s(&[
+            "record",
+            "--out",
+            "C:\\Llamadas",
+            "--app",
+            "Cliente",
+            "--platform",
+            "teams",
+            "--process",
+            "ms-teams.exe",
+            "--mic-only",
+            "--seconds",
+            "25",
+            "--model",
+            "small",
+            "--device",
+            "cpu",
+            "--language",
+            "en",
+        ]))
+        .unwrap();
+        let Command::Record(all) = all else {
+            panic!("esperaba record")
+        };
+        assert_eq!(
+            all,
+            RecordArgs {
+                out: "C:\\Llamadas".into(),
+                app: Some("Cliente".into()),
+                platform: Some("teams".into()),
+                process: Some("ms-teams.exe".into()),
+                mic_only: true,
+                seconds: Some(25),
+                model: "small".into(),
+                device: "cpu".into(),
+                language: "en".into(),
+            }
+        );
+        let Command::Record(d) = parse_args(&s(&["record", "--out", "x"])).unwrap() else {
+            panic!("esperaba record")
+        };
+        assert_eq!(
+            d,
+            RecordArgs {
+                out: "x".into(),
+                app: None,
+                platform: None,
+                process: None,
+                mic_only: false,
+                seconds: None,
+                model: "auto".into(),
+                device: "auto".into(),
+                language: "es".into(),
+            }
+        );
+        for bad in [
+            &["record"][..],
+            &["record", "--out"],
+            &["record", "--out", "x", "--bogus"],
+            &["record", "--out", "x", "--seconds", "mucho"],
+            &["record", "--out", "x", "--device", "tpu"],
+            &["record", "--out", "x", "--model", "gigante"],
+            &["record", "--out", "x", "--platform", "myspace"],
+        ] {
+            assert!(parse_args(&s(bad)).is_err(), "{bad:?}");
+        }
     }
 }

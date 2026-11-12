@@ -9,8 +9,15 @@ name = "anotalo"
 path = "src/main.rs"
 
 [dependencies]
+anotalo-core = { path = "../core" }
 anotalo-whisper = { path = "../whisper" }
+anotalo-winaudio = { path = "../winaudio" }
 hound = "3"
+log = "0.4"
+windows = { version = "0.62.2", features = ["Win32_System_Console"] }
 
 [build-dependencies]
 winresource = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

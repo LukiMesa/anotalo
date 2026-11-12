@@ -24,8 +24,13 @@ dependencies = [
 name = "anotalo"
 version = "0.1.0"
 dependencies = [
+ "anotalo-core",
  "anotalo-whisper",
+ "anotalo-winaudio",
  "hound",
+ "log",
+ "tempfile",
+ "windows",
  "winresource",
 ]
 
