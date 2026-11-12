@@ -3,4 +3,5 @@
 pub mod filter;
 pub mod resample;
 pub mod segmenter;
+pub mod transcript;
 pub mod vad;
