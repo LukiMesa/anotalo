@@ -115,9 +115,7 @@ mod tests {
             .samples::<i16>()
             .map(|s| f32::from(s.unwrap()) / 32768.0)
             .collect();
-        x.chunks_exact(FRAME)
-            .map(|c| c.try_into().unwrap())
-            .collect()
+        x.as_chunks::<FRAME>().0.to_vec()
     }
 
     #[test]
