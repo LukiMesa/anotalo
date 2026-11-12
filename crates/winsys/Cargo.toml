@@ -7,8 +7,16 @@ license.workspace = true
 [dependencies]
 log = "0.4"
 windows = { version = "0.62.2", features = [
+    "Data_Xml_Dom",
+    "UI_Notifications",
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_DataExchange",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Memory",
     "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_WinRT",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
