@@ -225,6 +225,23 @@ fn mic_starts_on_the_default_device() {
 
 #[test]
 #[ignore]
+fn mic_falls_back_to_the_default_when_its_device_is_gone() {
+    use anotalo_winaudio::capture::MicSource;
+
+    // Auriculares Bluetooth apagados a mitad de llamada: su id ya no existe. La sesión vuelve a
+    // abrir el micrófono y debe seguir grabando con el predeterminado (como la v0.6.3).
+    let gone = "{0.0.1.00000000}.{00000000-0000-0000-0000-000000000000}";
+    let mut src = MicSource::new(Some(gone.into()));
+    let (got, on_audio) = collector();
+    src.start(on_audio).unwrap();
+    std::thread::sleep(Duration::from_millis(1000));
+    assert!(src.is_active());
+    src.stop();
+    assert!(got.lock().unwrap().len() > 8_000);
+}
+
+#[test]
+#[ignore]
 fn process_loopback_opens_for_a_running_app() {
     use anotalo_winaudio::capture::ProcessLoopbackSource;
     use anotalo_winaudio::sources::find_root_pid;

@@ -277,7 +277,16 @@ impl Stream {
         // SAFETY: llamadas COM en un hilo con COM iniciado.
         unsafe {
             let (client, loopback, process) = match target {
-                Target::Mic(id) => (endpoint_client(id.as_deref(), eCapture)?, 0, None),
+                // Un micrófono que ya no está (auriculares apagados): el predeterminado de ahora,
+                // como la v0.6.3. Así la sesión, al reabrir, sigue grabando "Yo".
+                Target::Mic(id) => match endpoint_client(id.as_deref(), eCapture) {
+                    Ok(client) => (client, 0, None),
+                    Err(e) if id.is_some() => {
+                        log::warn!("El micrófono elegido no está ({e}); uso el predeterminado");
+                        (endpoint_client(None, eCapture)?, 0, None)
+                    }
+                    Err(e) => return Err(e),
+                },
                 Target::Output(id) => (
                     endpoint_client(id.as_deref(), eRender)?,
                     AUDCLNT_STREAMFLAGS_LOOPBACK,
