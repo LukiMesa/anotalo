@@ -8,6 +8,7 @@ pub mod engine;
 pub mod filter;
 pub mod hotkey;
 pub mod library;
+pub mod meta;
 pub mod model;
 pub mod models;
 pub mod notify;

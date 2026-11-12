@@ -55,7 +55,7 @@ fn renamed_line(line: &str, from: &str, to: &str) -> Option<String> {
 
 /// La app tiene el archivo abierto mientras graba la llamada (y lo reescribe al colgar).
 #[cfg(windows)]
-fn being_recorded(md: &Path) -> bool {
+pub(crate) fn being_recorded(md: &Path) -> bool {
     use std::os::windows::fs::OpenOptionsExt;
     const ERROR_SHARING_VIOLATION: i32 = 32;
     matches!(
@@ -65,7 +65,7 @@ fn being_recorded(md: &Path) -> bool {
 }
 
 #[cfg(not(windows))]
-fn being_recorded(_md: &Path) -> bool {
+pub(crate) fn being_recorded(_md: &Path) -> bool {
     false
 }
 
