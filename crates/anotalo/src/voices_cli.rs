@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anotalo_core::config::{config_path, load_settings};
 use anotalo_core::paths::{self, Profile};
 use anotalo_core::speaker::memory::{VoiceStore, voices_path};
-use anotalo_core::speaker::naming::name_in_call;
+use anotalo_core::speaker::naming::{forget_in_call_prints, name_in_call};
 
 /// `%APPDATA%\Anotalo\llamadas`: las voces de cada llamada.
 pub fn prints_dir(p: Profile) -> PathBuf {
@@ -48,12 +48,18 @@ pub fn list() -> String {
 }
 
 pub fn forget(name: &str) -> Result<String, String> {
-    let mut store = VoiceStore::load(&voices_path(paths::profile()));
+    let p = paths::profile();
+    let mut store = VoiceStore::load(&voices_path(p));
     if !store.forget(name) {
         return Err(format!("No hay ninguna voz guardada como «{name}»."));
     }
     store
         .save()
         .map_err(|e| format!("No se pudo guardar: {e}"))?;
-    Ok(format!("Borré la voz de «{name}»."))
+    // también de las llamadas recientes: si no, se podría volver a recordar desde ellas
+    Ok(match forget_in_call_prints(&prints_dir(p), name) {
+        0 => format!("Borré la voz de «{name}»."),
+        1 => format!("Borré la voz de «{name}», también de 1 llamada reciente."),
+        n => format!("Borré la voz de «{name}», también de {n} llamadas recientes."),
+    })
 }

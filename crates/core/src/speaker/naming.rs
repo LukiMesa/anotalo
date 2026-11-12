@@ -5,12 +5,12 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use super::diarizer::{CallVoice, PERSON};
-use super::memory::{VoiceStore, mix};
+use super::memory::{PRINT_SPACE, STALE_TMP, VoiceStore, current_space, mix, remove_old};
 
 /// Las huellas de cada llamada se guardan 30 días: lo justo para nombrar a alguien después.
 pub const KEEP_CALL_PRINTS: Duration = Duration::from_secs(30 * 86_400);
@@ -121,7 +121,8 @@ fn is_reserved(name: &str, reserved: &[&str]) -> bool {
 /// Nombra a `from` como `to` en la llamada `md` y, si la llamada guardó su huella, la recuerda.
 /// Si `to` es una etiqueta de la app (`reserved`, "Persona N") solo se corrige el archivo: es
 /// juntar a una persona partida en dos, no un nombre. Si `from` ya era un nombre puesto por el
-/// usuario en esta llamada, es una corrección y se cambia el nombre de la voz guardada.
+/// usuario en esta llamada, es una corrección y se cambia el nombre de la voz guardada. Las
+/// huellas de otro espacio ([`PRINT_SPACE`]) cuentan como si no estuvieran.
 pub fn name_in_call(
     md: &Path,
     prints_dir: &Path,
@@ -133,9 +134,7 @@ pub fn name_in_call(
     let to = validate_name(to)?;
     let lines = rename_speaker(md, from, &to)?;
     let path = call_prints_path(prints_dir, md);
-    let mut prints: Option<CallPrints> = fs::read(&path)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok());
+    let mut prints = load_call_prints(&path).filter(|p| p.space == PRINT_SPACE);
     let Some(p) = prints.as_mut() else {
         return Ok(NameOutcome {
             lines,
@@ -148,6 +147,13 @@ pub fn name_in_call(
             remembered: false,
         });
     };
+    // el mismo nombre otra vez: su huella ya está en la memoria (contarla dos veces la desviaría)
+    if from == to && store.voices.iter().any(|v| v.name == to) {
+        return Ok(NameOutcome {
+            lines,
+            remembered: true,
+        });
+    }
     let remembered = !is_reserved(&to, reserved);
     if remembered {
         let v = &p.voices[i];
@@ -175,34 +181,67 @@ pub fn name_in_call(
             p.voices[i].named = remembered;
         }
     }
-    if let Err(e) = write_json(&path, p) {
+    if let Err(e) = rewrite_call_prints(&path, p) {
         log::warn!("No se pudieron actualizar las voces de la llamada: {e}");
     }
     Ok(NameOutcome { lines, remembered })
 }
 
-/// Borra las huellas de llamadas más antiguas que `older_than`. Devuelve cuántas.
+/// Borra las huellas de llamadas más antiguas que `older_than` y las que se quedaron a medio
+/// guardar (`*.json.tmp` de más de un día). Devuelve cuántos archivos.
 pub fn prune_call_prints(prints_dir: &Path, older_than: Duration) -> usize {
+    remove_old(prints_dir, |file| {
+        if file.ends_with(".json") {
+            Some(older_than)
+        } else if file.ends_with(".json.tmp") {
+            Some(STALE_TMP)
+        } else {
+            None
+        }
+    })
+}
+
+/// Quita la huella de `name` de las voces de cada llamada, al borrar su voz guardada: si no, se
+/// podría volver a recordar desde ellas. Devuelve de cuántas llamadas.
+pub fn forget_in_call_prints(prints_dir: &Path, name: &str) -> usize {
     let Ok(entries) = fs::read_dir(prints_dir) else {
         return 0;
     };
-    let now = SystemTime::now();
     entries
         .flatten()
-        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-        .filter(|e| {
-            e.metadata()
-                .and_then(|m| m.modified())
-                .is_ok_and(|t| now.duration_since(t).unwrap_or_default() > older_than)
-        })
-        .filter(|e| fs::remove_file(e.path()).is_ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .filter(|p| forget_in(p, name))
         .count()
+}
+
+fn forget_in(path: &Path, name: &str) -> bool {
+    let Some(mut prints) = load_call_prints(path) else {
+        return false;
+    };
+    let before = prints.voices.len();
+    prints.voices.retain(|v| v.label != name);
+    if prints.voices.len() == before {
+        return false;
+    }
+    let done = if prints.voices.is_empty() {
+        fs::remove_file(path)
+    } else {
+        rewrite_call_prints(path, &prints)
+    };
+    if let Err(e) = &done {
+        log::warn!("No se pudo quitar la voz de {}: {e}", path.display());
+    }
+    done.is_ok()
 }
 
 /// Las voces de una llamada.
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct CallPrints {
     pub version: u32,
+    /// El espacio de las huellas ([`PRINT_SPACE`]) con el que se sacaron.
+    #[serde(default = "current_space")]
+    pub space: String,
     /// Nombre del archivo `.md` de la llamada.
     pub file: String,
     pub voices: Vec<CallVoice>,
@@ -226,6 +265,23 @@ fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
+fn load_call_prints(path: &Path) -> Option<CallPrints> {
+    fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+/// Reescribe las voces de una llamada sin cambiarles la fecha: es la que cuenta para borrarlas a
+/// los 30 días.
+fn rewrite_call_prints(path: &Path, prints: &CallPrints) -> io::Result<()> {
+    let modified = fs::metadata(path)?.modified()?;
+    write_json(path, prints)?;
+    fs::File::options()
+        .write(true)
+        .open(path)?
+        .set_modified(modified)
+}
+
 /// Guarda las voces de la llamada de `transcript`.
 pub fn save_call_prints(
     prints_dir: &Path,
@@ -234,6 +290,7 @@ pub fn save_call_prints(
 ) -> io::Result<()> {
     let prints = CallPrints {
         version: 1,
+        space: current_space(),
         file: transcript
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),

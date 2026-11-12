@@ -31,7 +31,7 @@ use anotalo_core::notify::Notifier;
 use anotalo_core::paths::{self, Profile};
 use anotalo_core::routing::Platform;
 use anotalo_core::session::{CallSession, OnLevel, OnLine, SessionConfig, SourceFactory, Speakers};
-use anotalo_core::speaker::memory::{VoiceStore, voices_path};
+use anotalo_core::speaker::memory::{VoiceStore, prune_voice_backups, voices_path};
 use anotalo_core::speaker::model::SpeakerModel;
 use anotalo_core::speaker::naming::{KEEP_CALL_PRINTS, prune_call_prints};
 use anotalo_core::vad::Vad;
@@ -327,6 +327,17 @@ fn in_background(name: &str, f: impl FnOnce() + Send + 'static) {
     let _ = std::thread::Builder::new().name(name.into()).spawn(f);
 }
 
+/// Borra las huellas de voz que ya no se guardan: las de llamadas de hace más de 30 días y las
+/// copias y restos de guardados que quedan junto a ellas. Al arrancar y al terminar cada llamada
+/// (la bandeja puede pasar semanas abierta).
+fn prune_prints(profile: Profile) {
+    let n = prune_call_prints(&prints_dir(profile), KEEP_CALL_PRINTS)
+        + prune_voice_backups(&voices_path(profile), KEEP_CALL_PRINTS);
+    if n > 0 {
+        log::info!("Borrados {n} archivos de huellas de voz antiguos");
+    }
+}
+
 fn open_folder(dir: &str) {
     if let Err(e) = std::fs::create_dir_all(dir) {
         log::warn!("No se pudo crear {dir}: {e}");
@@ -358,6 +369,7 @@ struct Shell {
     shown: Cell<Option<(State, Option<u8>)>>,
     quitting: Cell<bool>,
     taskbar_created: u32,
+    profile: Profile,
 }
 
 impl Shell {
@@ -370,7 +382,11 @@ impl Shell {
             self.wiring.on_event(&e);
             match &e {
                 AppEvent::State(s) => self.show_state(*s),
-                AppEvent::SessionEnded { .. } => self.model.touch(Instant::now()),
+                AppEvent::SessionEnded { .. } => {
+                    self.model.touch(Instant::now());
+                    let p = self.profile;
+                    in_background("borrar huellas", move || prune_prints(p));
+                }
                 AppEvent::Line {
                     speaker, hms, text, ..
                 } => log::debug!("[{hms}] {speaker}: {text}"),
@@ -613,10 +629,7 @@ pub fn run() -> ExitCode {
         initial: Arc::new(settings.clone()),
     };
     let model = model_manager(&r, notifier.clone());
-    let pruned = prune_call_prints(&prints_dir(profile), KEEP_CALL_PRINTS);
-    if pruned > 0 {
-        log::info!("Borradas las voces de {pruned} llamadas de hace más de 30 días");
-    }
+    prune_prints(profile);
     let voices = SpeakerModel::new(models_dir(), Arc::new(HttpFetch::default()));
     voices.ensure();
     let (tx, rx) = mpsc::channel::<AppEvent>();
@@ -668,6 +681,7 @@ pub fn run() -> ExitCode {
         shown: Cell::new(None),
         quitting: Cell::new(false),
         taskbar_created: window::taskbar_created(),
+        profile,
     });
     window::set_handler(Some(shell.clone()));
     shell.add_tray();

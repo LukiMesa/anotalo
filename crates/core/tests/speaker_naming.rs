@@ -4,12 +4,13 @@ mod common {
 }
 
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use anotalo_core::speaker::diarizer::CallVoice;
-use anotalo_core::speaker::memory::VoiceStore;
+use anotalo_core::speaker::memory::{PRINT_SPACE, VoiceStore};
 use anotalo_core::speaker::naming::{
-    CallPrints, KEEP_CALL_PRINTS, call_prints_path, name_in_call, prune_call_prints,
-    rename_speaker, save_call_prints,
+    CallPrints, KEEP_CALL_PRINTS, call_prints_path, forget_in_call_prints, name_in_call,
+    prune_call_prints, rename_speaker, save_call_prints,
 };
 use common::speaker::basis;
 
@@ -31,6 +32,30 @@ fn write_prints(prints_dir: &Path, md: &Path, voices: &[(&str, Vec<f32>, f64)]) 
         })
         .collect();
     save_call_prints(prints_dir, md, voices).unwrap();
+}
+
+fn read_prints(prints_dir: &Path, md: &Path) -> CallPrints {
+    serde_json::from_slice(&std::fs::read(call_prints_path(prints_dir, md)).unwrap()).unwrap()
+}
+
+fn days_ago(days: u64) -> SystemTime {
+    SystemTime::now() - Duration::from_secs(days * 86_400)
+}
+
+fn set_mtime(p: &Path, t: SystemTime) {
+    std::fs::File::options()
+        .write(true)
+        .open(p)
+        .unwrap()
+        .set_modified(t)
+        .unwrap();
+}
+
+/// Si la fecha de modificación de `p` es (casi) `t`.
+fn modified_at(p: &Path, t: SystemTime) -> bool {
+    let m = std::fs::metadata(p).unwrap().modified().unwrap();
+    let diff = m.duration_since(t).unwrap_or_else(|e| e.duration());
+    diff < Duration::from_secs(2)
 }
 
 #[test]
@@ -109,26 +134,102 @@ fn test_name_in_call_remembers_the_voice() {
 }
 
 #[test]
+fn test_naming_again_with_the_same_name_does_not_count_twice() {
+    let d = tempfile::tempdir().unwrap();
+    let (md, prints) = (d.path().join("a.md"), d.path().join("llamadas"));
+    std::fs::write(&md, MD).unwrap();
+    write_prints(&prints, &md, &[("Persona 1", basis(0), 20.0)]);
+    let voces = d.path().join("voces.json");
+    let mut store = VoiceStore::load(&voces);
+    name_in_call(&md, &prints, &mut store, "Persona 1", "María", RESERVED).unwrap();
+    let again = name_in_call(&md, &prints, &mut store, "María", "María", RESERVED).unwrap();
+    assert_eq!((again.lines, again.remembered), (2, true));
+    assert_eq!(store.voices[0].seconds, 20.0);
+    assert_eq!(VoiceStore::load(&voces).voices[0].seconds, 20.0);
+    // sin esa voz en la memoria (p. ej. si voces.json se perdió), volver a nombrarla la recuerda
+    let mut fresh = VoiceStore::load(&d.path().join("otras.json"));
+    let out = name_in_call(&md, &prints, &mut fresh, "María", "María", RESERVED).unwrap();
+    assert!(out.remembered);
+    assert_eq!(fresh.voices[0].seconds, 20.0);
+}
+
+#[test]
+fn test_naming_keeps_the_prints_file_age() {
+    let d = tempfile::tempdir().unwrap();
+    let (md, prints) = (d.path().join("a.md"), d.path().join("llamadas"));
+    std::fs::write(&md, MD).unwrap();
+    write_prints(&prints, &md, &[("Persona 1", basis(0), 20.0)]);
+    let file = call_prints_path(&prints, &md);
+    let t = days_ago(20);
+    set_mtime(&file, t);
+    let mut store = VoiceStore::load(&d.path().join("voces.json"));
+    name_in_call(&md, &prints, &mut store, "Persona 1", "María", RESERVED).unwrap();
+    assert_eq!(read_prints(&prints, &md).voices[0].label, "María");
+    assert!(modified_at(&file, t));
+}
+
+#[test]
+fn test_forget_in_call_prints() {
+    let d = tempfile::tempdir().unwrap();
+    let prints = d.path().join("llamadas");
+    let (a, b, c) = (
+        d.path().join("a.md"),
+        d.path().join("b.md"),
+        d.path().join("c.md"),
+    );
+    write_prints(
+        &prints,
+        &a,
+        &[("María", basis(0), 20.0), ("Persona 2", basis(1), 5.0)],
+    );
+    write_prints(&prints, &b, &[("María", basis(0), 8.0)]);
+    write_prints(&prints, &c, &[("Persona 1", basis(2), 9.0)]);
+    let t = days_ago(10);
+    set_mtime(&call_prints_path(&prints, &a), t);
+    assert_eq!(forget_in_call_prints(&prints, "María"), 2);
+    let left = read_prints(&prints, &a).voices;
+    assert_eq!(
+        left.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(),
+        ["Persona 2"]
+    );
+    assert!(modified_at(&call_prints_path(&prints, &a), t));
+    assert!(!call_prints_path(&prints, &b).exists());
+    assert_eq!(read_prints(&prints, &c).voices[0].label, "Persona 1");
+    assert_eq!(forget_in_call_prints(&prints, "María"), 0);
+    assert_eq!(
+        forget_in_call_prints(&d.path().join("no-existe"), "María"),
+        0
+    );
+}
+
+#[test]
+fn test_prints_from_another_space_are_not_used() {
+    let d = tempfile::tempdir().unwrap();
+    let (md, prints) = (d.path().join("a.md"), d.path().join("llamadas"));
+    std::fs::write(&md, MD).unwrap();
+    write_prints(&prints, &md, &[("Persona 1", basis(0), 20.0)]);
+    let file = call_prints_path(&prints, &md);
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(json["space"], PRINT_SPACE);
+    json["space"] = "otro/modelo".into();
+    std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
+    let voces = d.path().join("voces.json");
+    let mut store = VoiceStore::load(&voces);
+    let out = name_in_call(&md, &prints, &mut store, "Persona 1", "María", RESERVED).unwrap();
+    assert_eq!((out.lines, out.remembered), (2, false));
+    assert!(store.voices.is_empty() && !voces.exists());
+}
+
+#[test]
 fn test_prune_call_prints() {
     let d = tempfile::tempdir().unwrap();
     let (old, new) = (d.path().join("old.md.json"), d.path().join("new.md.json"));
     for p in [&old, &new] {
         std::fs::write(p, "{}").unwrap();
     }
-    let ago =
-        |days: u64| std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
-    std::fs::File::options()
-        .write(true)
-        .open(&old)
-        .unwrap()
-        .set_modified(ago(31))
-        .unwrap();
-    std::fs::File::options()
-        .write(true)
-        .open(&new)
-        .unwrap()
-        .set_modified(ago(29))
-        .unwrap();
+    set_mtime(&old, days_ago(31));
+    set_mtime(&new, days_ago(29));
     assert_eq!(prune_call_prints(d.path(), KEEP_CALL_PRINTS), 1);
     assert!(!old.exists() && new.exists());
     assert_eq!(
@@ -206,4 +307,19 @@ fn test_naming_a_call_still_recording_is_refused() {
     assert!(e.contains("grabando"), "{e}");
     drop(writer);
     assert_eq!(std::fs::read_to_string(&p).unwrap(), MD);
+}
+
+#[test]
+fn test_prune_removes_half_saved_prints() {
+    let d = tempfile::tempdir().unwrap();
+    let (stale, fresh) = (
+        d.path().join("a.md.json.tmp"),
+        d.path().join("b.md.json.tmp"),
+    );
+    for p in [&stale, &fresh] {
+        std::fs::write(p, "{").unwrap();
+    }
+    set_mtime(&stale, days_ago(2));
+    assert_eq!(prune_call_prints(d.path(), KEEP_CALL_PRINTS), 1);
+    assert!(!stale.exists() && fresh.exists());
 }

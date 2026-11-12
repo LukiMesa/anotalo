@@ -3,8 +3,14 @@ mod common {
     pub mod speaker;
 }
 
+use std::path::Path;
+use std::time::{Duration, SystemTime};
+
 use anotalo_core::speaker::embed::{DIM, cosine, l2n};
-use anotalo_core::speaker::memory::{StoredVoice, VoiceStore, name_clusters};
+use anotalo_core::speaker::memory::{
+    PRINT_SPACE, StoredVoice, VoiceStore, name_clusters, prune_voice_backups,
+};
+use anotalo_core::speaker::naming::KEEP_CALL_PRINTS;
 use common::speaker::basis;
 
 /// Un vector con coseno `cos` respecto a `basis(0)`.
@@ -156,6 +162,67 @@ fn test_store_roundtrip_and_damaged_file() {
         std::fs::read_to_string(d.path().join("voces.json.bad")).unwrap(),
         "{"
     );
+}
+
+#[test]
+fn test_store_from_another_print_space_is_set_aside() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("voces.json");
+    let other = r#"{"version":1,"space":"otro/modelo","voices":[{"name":"María","print":[1.0],"seconds":10.0}]}"#;
+    std::fs::write(&p, other).unwrap();
+    assert!(VoiceStore::load(&p).voices.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("voces.json.otro_modelo.bak")).unwrap(),
+        other
+    );
+    assert!(!p.exists());
+    // sin etiqueta (solo lo escribieron versiones de desarrollo): es el espacio actual
+    let untagged = r#"{"version":1,"voices":[{"name":"Ana","print":[1.0],"seconds":5.0}]}"#;
+    std::fs::write(&p, untagged).unwrap();
+    let s = VoiceStore::load(&p);
+    assert_eq!(s.voices.len(), 1);
+    s.save().unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+    assert_eq!(saved["space"], PRINT_SPACE);
+    assert_eq!(VoiceStore::load(&p).voices, s.voices);
+}
+
+#[test]
+fn test_prune_voice_backups() {
+    let d = tempfile::tempdir().unwrap();
+    let voces = d.path().join("voces.json");
+    let file = |n: &str, days: u64| {
+        let p = d.path().join(n);
+        std::fs::write(&p, "{").unwrap();
+        set_mtime(&p, SystemTime::now() - Duration::from_secs(days * 86_400));
+        p
+    };
+    let keep = [
+        file("voces.json", 40),
+        file("voces.json.reciente.bak", 29),
+        file("notas.txt", 40),
+    ];
+    let gone = [
+        file("voces.json.bad", 31),
+        file("voces.json.otro_modelo.bak", 31),
+        file("voces.json.tmp", 2),
+    ];
+    assert_eq!(prune_voice_backups(&voces, KEEP_CALL_PRINTS), 3);
+    assert!(keep.iter().all(|p| p.exists()));
+    assert!(gone.iter().all(|p| !p.exists()));
+    assert_eq!(
+        prune_voice_backups(&d.path().join("no-existe/voces.json"), KEEP_CALL_PRINTS),
+        0
+    );
+}
+
+fn set_mtime(p: &Path, t: SystemTime) {
+    std::fs::File::options()
+        .write(true)
+        .open(p)
+        .unwrap()
+        .set_modified(t)
+        .unwrap();
 }
 
 #[test]
