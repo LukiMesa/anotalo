@@ -4,6 +4,7 @@ pub mod engine;
 pub mod filter;
 pub mod models;
 pub mod resample;
+pub mod routing;
 pub mod segmenter;
 pub mod transcript;
 pub mod vad;
