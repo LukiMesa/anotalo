@@ -11,6 +11,21 @@ use anotalo_whisper::{DeviceKind, LoadOptions, Model, Params, devices};
 mod record;
 mod shell;
 mod tray_app;
+mod voices_cli;
+
+/// El mensaje de una orden por la consola: 0 si salió bien, 1 si no.
+fn report(r: Result<String, String>) -> ExitCode {
+    match r {
+        Ok(msg) => {
+            println!("{msg}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Error: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
 use record::RecordArgs;
 
 const USAGE: &str = "Uso:
@@ -19,7 +34,9 @@ const USAGE: &str = "Uso:
   anotalo selftest [--model <modelo>] [--wav <audio.wav>]
   anotalo record --out <carpeta> [--app <etiqueta>] [--platform <teams|zoom|…>] [--process <exe>]
                  [--mic-only] [--seconds <n>] [--model <auto|large-v3-turbo|…>]
-                 [--device <auto|gpu|cpu>] [--language <es>]";
+                 [--device <auto|gpu|cpu>] [--language <es>]
+  anotalo nombrar <archivo.md> <etiqueta> <nombre>
+  anotalo voces [borrar <nombre>]";
 
 /// "Anotalo <versión>", lo que imprime `--version`.
 fn version_line() -> String {
@@ -36,6 +53,15 @@ enum Command {
         wav: Option<PathBuf>,
     },
     Record(RecordArgs),
+    /// Poner nombre a una persona de una llamada grabada (y recordar su voz).
+    Name {
+        file: PathBuf,
+        from: String,
+        to: String,
+    },
+    /// Las voces guardadas.
+    Voices,
+    ForgetVoice(String),
 }
 
 fn parse_args(args: &[String]) -> Result<Command, String> {
@@ -59,6 +85,15 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             Ok(Command::Selftest { model, wav })
         }
         Some("record") => parse_record(&args[1..]).map(Command::Record),
+        Some("nombrar") if args.len() == 4 => Ok(Command::Name {
+            file: PathBuf::from(&args[1]),
+            from: args[2].clone(),
+            to: args[3].clone(),
+        }),
+        Some("voces") if args.len() == 1 => Ok(Command::Voices),
+        Some("voces") if args.len() == 3 && args[1] == "borrar" => {
+            Ok(Command::ForgetVoice(args[2].clone()))
+        }
         _ => Err(USAGE.to_string()),
     }
 }
@@ -286,6 +321,12 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Ok(Command::Name { file, from, to }) => report(voices_cli::name(&file, &from, &to)),
+        Ok(Command::Voices) => {
+            println!("{}", voices_cli::list());
+            ExitCode::SUCCESS
+        }
+        Ok(Command::ForgetVoice(name)) => report(voices_cli::forget(&name)),
         Err(usage) => {
             eprintln!("{usage}");
             ExitCode::from(2)
@@ -319,6 +360,33 @@ mod tests {
         }
         assert!(super::parse_args(&s(&["selftest", "--model"])).is_err());
         assert!(super::parse_args(&s(&["otra-cosa"])).is_err());
+    }
+
+    #[test]
+    fn parses_voice_commands() {
+        use super::{Command, parse_args};
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        match parse_args(&s(&["nombrar", "a.md", "Persona 1", "María"])).unwrap() {
+            Command::Name { file, from, to } => {
+                assert_eq!(file, std::path::PathBuf::from("a.md"));
+                assert_eq!((from.as_str(), to.as_str()), ("Persona 1", "María"));
+            }
+            other => panic!("esperaba nombrar: {other:?}"),
+        }
+        assert!(matches!(parse_args(&s(&["voces"])), Ok(Command::Voices)));
+        assert!(matches!(
+            parse_args(&s(&["voces", "borrar", "María"])),
+            Ok(Command::ForgetVoice(n)) if n == "María"
+        ));
+        for bad in [
+            &["nombrar", "a.md"][..],
+            &["nombrar", "a.md", "x", "y", "z"],
+            &["voces", "borrar"],
+            &["voces", "otra"],
+        ] {
+            assert!(parse_args(&s(bad)).is_err(), "{bad:?}");
+        }
+        assert!(super::USAGE.contains("anotalo nombrar <archivo.md> <etiqueta> <nombre>"));
     }
 
     #[test]
