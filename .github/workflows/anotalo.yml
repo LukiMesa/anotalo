@@ -79,13 +79,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Modelo de prueba (caché)
+      - name: Modelos de prueba (caché)
         uses: actions/cache@v4
         with:
-          path: target\models\ggml-tiny.bin
-          key: ggml-tiny-v1
+          path: |
+            target\models\ggml-tiny.bin
+            target\models\nemo_en_titanet_small.onnx
+          key: test-models-v2
 
-      - name: Descargar el modelo de prueba
+      - name: Descargar los modelos de prueba
         shell: pwsh
         run: .\scripts\get-test-model.ps1
 
