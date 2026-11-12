@@ -2,7 +2,10 @@
 use std::cell::RefCell;
 use std::io::{self, Cursor, Read};
 
-use anotalo_core::models::{CATALOG, Fetch, ModelFile, Placement, choose, ensure_model, model_for};
+use anotalo_core::models::{
+    CATALOG, Fetch, ModelFile, Placement, TITANET, TITANET_URL, choose, ensure_download,
+    ensure_model, model_for,
+};
 use anotalo_whisper::{Device, DeviceKind};
 use sha2::{Digest, Sha256};
 
@@ -10,11 +13,13 @@ use sha2::{Digest, Sha256};
 struct FakeFetch {
     data: Vec<u8>,
     calls: RefCell<Vec<u64>>,
+    urls: RefCell<Vec<String>>,
 }
 
 impl Fetch for FakeFetch {
-    fn open(&self, _url: &str, from_byte: u64) -> io::Result<Box<dyn Read>> {
+    fn open(&self, url: &str, from_byte: u64) -> io::Result<Box<dyn Read>> {
         self.calls.borrow_mut().push(from_byte);
+        self.urls.borrow_mut().push(url.to_string());
         Ok(Box::new(Cursor::new(
             self.data[from_byte as usize..].to_vec(),
         )))
@@ -42,6 +47,7 @@ fn fetch(data: Vec<u8>) -> FakeFetch {
     FakeFetch {
         data,
         calls: RefCell::new(Vec::new()),
+        urls: RefCell::new(Vec::new()),
     }
 }
 
@@ -216,5 +222,40 @@ fn cpu_threads_follow_physical_cores_up_to_8() {
     assert_eq!(
         anotalo_core::models::cpu_threads() as usize,
         physical.min(8)
+    );
+}
+
+#[test]
+fn test_titanet_is_pinned() {
+    assert_eq!(TITANET.file, "nemo_en_titanet_small.onnx");
+    assert_eq!(TITANET.size, 40_257_283);
+    assert_eq!(
+        TITANET.sha256,
+        "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e"
+    );
+    assert_eq!(
+        TITANET_URL,
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_small.onnx"
+    );
+}
+
+#[test]
+fn test_ensure_download_uses_the_given_url() {
+    let d = tempfile::tempdir().unwrap();
+    let data = payload();
+    let m = fake_model(&data);
+    let f = fetch(data);
+    let p = ensure_download(
+        &m,
+        "https://example.invalid/x.bin",
+        d.path(),
+        &f,
+        &mut |_| {},
+    )
+    .unwrap();
+    assert!(p.exists());
+    assert_eq!(
+        f.urls.borrow().as_slice(),
+        ["https://example.invalid/x.bin"]
     );
 }

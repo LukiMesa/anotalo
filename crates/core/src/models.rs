@@ -120,11 +120,42 @@ impl Fetch for HttpFetch {
     }
 }
 
-/// El modelo en `dir`, descargándolo si hace falta. Un archivo completo ya presente se acepta tal
-/// cual (no se vuelve a calcular su huella); si no, se descarga a `<archivo>.part` continuando lo que
-/// hubiera, se comprueban tamaño y SHA-256 y se renombra. Si no coincide, se borra.
+/// El modelo de voces (spec §2.4.5): NeMo TitaNet-small en ONNX, de la publicación de sherpa-onnx.
+pub const TITANET: ModelFile = ModelFile {
+    setting: "speaker",
+    file: "nemo_en_titanet_small.onnx",
+    size: 40_257_283,
+    sha256: "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e",
+};
+
+/// La etiqueta de la publicación se llama así ("recongition"), con la errata.
+pub const TITANET_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_small.onnx";
+
+/// El modelo de whisper.cpp en `dir`, descargándolo de Hugging Face si hace falta.
 pub fn ensure_model(
     m: &ModelFile,
+    dir: &Path,
+    fetch: &dyn Fetch,
+    progress: &mut dyn FnMut(f32),
+) -> Result<PathBuf, String> {
+    ensure_download(m, &format!("{BASE_URL}{}", m.file), dir, fetch, progress)
+}
+
+/// El modelo de voces en `dir`, descargándolo si hace falta.
+pub fn ensure_titanet(
+    dir: &Path,
+    fetch: &dyn Fetch,
+    progress: &mut dyn FnMut(f32),
+) -> Result<PathBuf, String> {
+    ensure_download(&TITANET, TITANET_URL, dir, fetch, progress)
+}
+
+/// El archivo `m` en `dir`, descargándolo de `url` si hace falta. Un archivo completo ya presente se
+/// acepta tal cual (no se vuelve a calcular su huella); si no, se descarga a `<archivo>.part`
+/// continuando lo que hubiera, se comprueban tamaño y SHA-256 y se renombra. Si no coincide, se borra.
+pub fn ensure_download(
+    m: &ModelFile,
+    url: &str,
     dir: &Path,
     fetch: &dyn Fetch,
     progress: &mut dyn FnMut(f32),
@@ -136,9 +167,8 @@ pub fn ensure_model(
     }
     fs::create_dir_all(dir).map_err(|e| format!("no se pudo crear {}: {e}", dir.display()))?;
     let part = dir.join(format!("{}.part", m.file));
-    let url = format!("{BASE_URL}{}", m.file);
 
-    let mut result = download(m, &part, &url, fetch, progress);
+    let mut result = download(m, &part, url, fetch, progress);
     if matches!(&result, Err(DownloadError::CannotResume)) {
         let _ = fs::remove_file(&part);
         result = download(m, &part, &url, fetch, progress);
