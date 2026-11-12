@@ -105,6 +105,7 @@ pub fn record(a: &RecordArgs) -> Result<(), String> {
         max_segment_s: 25.0,
         min_segment_ms: 300,
         title: None,
+        speakers: None,
     };
     let session = CallSession::start(
         cfg,

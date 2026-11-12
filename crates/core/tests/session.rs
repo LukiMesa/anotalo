@@ -8,9 +8,18 @@ use std::time::Duration;
 use anotalo_core::engine::{Asr, Transcriber};
 use anotalo_core::models::Placement;
 use anotalo_core::segmenter::VadFn;
-use anotalo_core::session::{CallSession, OnLevel, OnLine, SessionConfig, SourceFactory};
+use anotalo_core::session::{CallSession, OnLevel, OnLine, SessionConfig, SourceFactory, Speakers};
 use anotalo_core::source::{AudioSource, OnAudio, now_s};
+use anotalo_core::speaker::embed::Embed;
+use anotalo_core::speaker::memory::StoredVoice;
+use anotalo_core::speaker::naming::{CallPrints, call_prints_path};
 use anotalo_whisper::Segment as Text;
+
+mod common {
+    pub mod speaker;
+}
+
+use common::speaker::basis;
 
 const SR: usize = 16_000;
 
@@ -46,10 +55,10 @@ struct Counters {
     stopped: Arc<AtomicBool>,
 }
 
-/// Entrega de golpe, al arrancar, silencio con 1 s de tono en cada `speech_at` y 1 s de silencio
-/// al final, en trozos de 50 ms.
+/// Entrega de golpe, al arrancar, silencio con 1 s de tono en cada momento de `speech` (a su
+/// frecuencia) y 1 s de silencio al final, en trozos de 50 ms.
 struct FakeSource {
-    speech_at: Vec<f64>,
+    speech: Vec<(f64, f32)>,
     fail_times: usize,
     active: bool,
     c: Counters,
@@ -57,8 +66,13 @@ struct FakeSource {
 
 impl FakeSource {
     fn new(speech_at: &[f64]) -> FakeSource {
+        FakeSource::voices(&speech_at.iter().map(|t| (*t, 220.0)).collect::<Vec<_>>())
+    }
+
+    /// Una voz distinta por frecuencia (`FakeEmbed` las distingue).
+    fn voices(speech: &[(f64, f32)]) -> FakeSource {
         FakeSource {
-            speech_at: speech_at.to_vec(),
+            speech: speech.to_vec(),
             fail_times: 0,
             active: true,
             c: Counters::default(),
@@ -77,12 +91,12 @@ impl AudioSource for FakeSource {
             self.fail_times -= 1;
             return Err("device gone".into());
         }
-        let end = self.speech_at.iter().copied().fold(0.0, f64::max) + 2.0;
+        let end = self.speech.iter().map(|(t, _)| *t).fold(0.0, f64::max) + 2.0;
         let mut x = vec![0.0f32; (end * SR as f64) as usize];
-        for &at in &self.speech_at {
+        for &(at, hz) in &self.speech {
             let from = (at * SR as f64) as usize;
             for i in 0..SR {
-                x[from + i] = 0.3 * (std::f32::consts::TAU * 220.0 * i as f32 / SR as f32).sin();
+                x[from + i] = 0.3 * (std::f32::consts::TAU * hz * i as f32 / SR as f32).sin();
             }
         }
         let base = now_s();
@@ -111,6 +125,7 @@ fn cfg(dir: &Path, label: &str) -> SessionConfig {
         max_segment_s: 25.0,
         min_segment_ms: 300,
         title: None,
+        speakers: None,
     }
 }
 
@@ -341,4 +356,127 @@ fn test_mark_lands_between_lines() {
     );
     assert!(yo < marca && marca < otros, "{text}");
     assert!(lines.lock().unwrap().iter().any(|w| w == "Marca"));
+}
+
+/// Distingue las voces falsas por su frecuencia (cruces por cero en la parte con sonido): bajo
+/// 330 Hz es `basis(0)`, encima `basis(1)`. Menos de 0,3 s de sonido: sin huella.
+struct FakeEmbed;
+
+impl Embed for FakeEmbed {
+    fn embed(&self, audio: &[f32]) -> Option<Vec<f32>> {
+        let voiced: Vec<f32> = audio.iter().copied().filter(|v| v.abs() > 0.01).collect();
+        if voiced.len() < SR * 3 / 10 {
+            return None;
+        }
+        let crossings = audio
+            .windows(2)
+            .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+            .count();
+        let hz = crossings as f32 / 2.0 / (voiced.len() as f32 / SR as f32);
+        Some(basis(if hz < 330.0 { 0 } else { 1 }))
+    }
+}
+
+struct NoEmbed;
+
+impl Embed for NoEmbed {
+    fn embed(&self, _audio: &[f32]) -> Option<Vec<f32>> {
+        None
+    }
+}
+
+fn speakers(dir: &Path, memory: Vec<StoredVoice>) -> Speakers {
+    Speakers {
+        embed: Arc::new(FakeEmbed),
+        memory,
+        prints_dir: dir.join("llamadas"),
+    }
+}
+
+fn start_with(
+    dir: &Path,
+    mic: FakeSource,
+    others: FakeSource,
+    speakers: Option<Speakers>,
+) -> CallSession {
+    let mut c = cfg(dir, "Teams");
+    c.speakers = speakers;
+    CallSession::start(
+        c,
+        transcriber(),
+        Box::new(mic),
+        Some(Box::new(others)),
+        None,
+        None,
+        None,
+        fake_vad(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_two_remote_voices_get_personas() {
+    let d = tempfile::tempdir().unwrap();
+    let sess = start_with(
+        d.path(),
+        FakeSource::new(&[]),
+        FakeSource::voices(&[(1.5, 220.0), (3.5, 440.0), (5.5, 220.0)]),
+        Some(speakers(d.path(), vec![])),
+    );
+    let path = sess.stop().unwrap();
+    let t = read(&path);
+    assert!(
+        t.contains("Persona 1:**") && t.contains("Persona 2:**") && !t.contains("Otros:**"),
+        "{t}"
+    );
+    let prints: CallPrints =
+        serde_json::from_str(&read(&call_prints_path(&d.path().join("llamadas"), &path))).unwrap();
+    assert_eq!(prints.voices.len(), 2);
+}
+
+#[test]
+fn test_one_remote_voice_stays_others() {
+    let d = tempfile::tempdir().unwrap();
+    let sess = start_with(
+        d.path(),
+        FakeSource::new(&[]),
+        FakeSource::voices(&[(1.5, 220.0), (3.5, 220.0)]),
+        Some(speakers(d.path(), vec![])),
+    );
+    let t = read(&sess.stop().unwrap());
+    assert!(t.contains("Otros:**") && !t.contains("Persona"), "{t}");
+}
+
+#[test]
+fn test_stored_voice_names_the_line() {
+    let d = tempfile::tempdir().unwrap();
+    let maria = StoredVoice {
+        name: "María".into(),
+        print: basis(1),
+        seconds: 60.0,
+    };
+    let sess = start_with(
+        d.path(),
+        FakeSource::new(&[]),
+        FakeSource::voices(&[(1.5, 440.0), (3.5, 440.0)]),
+        Some(speakers(d.path(), vec![maria])),
+    );
+    let t = read(&sess.stop().unwrap());
+    assert!(t.contains("María:**"), "{t}");
+}
+
+#[test]
+fn test_embed_failure_keeps_others() {
+    let d = tempfile::tempdir().unwrap();
+    let mut sp = speakers(d.path(), vec![]);
+    sp.embed = Arc::new(NoEmbed);
+    let sess = start_with(
+        d.path(),
+        FakeSource::new(&[]),
+        FakeSource::voices(&[(1.5, 220.0), (3.5, 440.0)]),
+        Some(sp),
+    );
+    let path = sess.stop().unwrap();
+    assert!(read(&path).contains("Otros:**"));
+    assert!(!call_prints_path(&d.path().join("llamadas"), &path).exists());
 }

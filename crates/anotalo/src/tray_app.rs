@@ -143,6 +143,7 @@ fn sessions(r: AppRef, model: Arc<ModelManager>) -> SessionFactory {
             max_segment_s: s.max_segment_s,
             min_segment_ms: s.min_segment_ms,
             title: req.title,
+            speakers: None,
         };
         CallSession::start(
             cfg,

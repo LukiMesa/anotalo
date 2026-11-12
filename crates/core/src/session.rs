@@ -16,6 +16,10 @@ use std::time::Duration;
 use crate::engine::Transcriber;
 use crate::segmenter::{Segment, Segmenter, SegmenterConfig, VadFn};
 use crate::source::{AudioSource, OnAudio, now_s};
+use crate::speaker::diarizer::Diarizer;
+use crate::speaker::embed::Embed;
+use crate::speaker::memory::StoredVoice;
+use crate::speaker::naming::save_call_prints;
 use crate::transcript::{TranscriptWriter, fmt_elapsed};
 
 /// Veces que se reabre una fuente que falla antes de darla por perdida.
@@ -36,6 +40,17 @@ pub struct SessionConfig {
     pub min_segment_ms: u32,
     /// Título de la reunión (`- Título:` en la cabecera), si se conoce.
     pub title: Option<String>,
+    /// Separar a cada persona de "Otros" (spec §2.4.5). None: todo es "Otros".
+    pub speakers: Option<Speakers>,
+}
+
+/// Lo que hace falta para separar las voces de "Otros".
+pub struct Speakers {
+    pub embed: Arc<dyn Embed>,
+    /// Las voces guardadas (para reconocerlas al colgar).
+    pub memory: Vec<StoredVoice>,
+    /// Dónde se guardan las voces de cada llamada.
+    pub prints_dir: PathBuf,
 }
 
 /// (hablante, "HH:MM:SS", inicio en s, texto) de cada línea nueva.
@@ -165,7 +180,9 @@ fn notify_line(cb: Option<&Arc<Mutex<OnLine>>>, speaker: &str, start_s: f64, tex
     }
 }
 
-type OnResult = Arc<dyn Fn(Segment, String) + Send + Sync>;
+type OnResult = Arc<dyn Fn(Segment, String, Option<u32>) + Send + Sync>;
+/// El modelo de voces y las voces de la llamada, para el carril de "Otros".
+type Diar = (Arc<dyn Embed>, Arc<Mutex<Diarizer>>);
 
 fn lane_worker(
     rx: Receiver<Msg>,
@@ -173,11 +190,23 @@ fn lane_worker(
     t0: f64,
     transcriber: Arc<Transcriber>,
     on_result: OnResult,
+    diar: Option<Diar>,
 ) {
     let submit = |segs: Vec<Segment>| {
-        for seg in segs {
+        for mut seg in segs {
+            // "Otros": la huella (fuera del cerrojo) y la etiqueta de su voz en este momento
+            let voice = diar.as_ref().map(|(embed, diarizer)| {
+                let emb = embed.embed(&seg.audio);
+                let (id, label) = diarizer.lock().unwrap_or_else(|e| e.into_inner()).add(
+                    seg.start_s,
+                    seg.end_s,
+                    emb,
+                );
+                seg.speaker = label;
+                id
+            });
             let cb = on_result.clone();
-            transcriber.submit(seg, Box::new(move |s, text| cb(s, text)));
+            transcriber.submit(seg, Box::new(move |s, text| cb(s, text, voice)));
         }
     };
     for msg in rx {
@@ -197,6 +226,8 @@ pub struct CallSession {
     transcriber: Arc<Transcriber>,
     workers: Vec<JoinHandle<()>>,
     ticker: Option<JoinHandle<()>>,
+    /// Las voces de "Otros" y dónde guardarlas, si se separan.
+    diarizer: Option<(Arc<Mutex<Diarizer>>, PathBuf)>,
 }
 
 impl CallSession {
@@ -232,21 +263,36 @@ impl CallSession {
             stop_changed: Condvar::new(),
             others_factory: others_factory.map(Mutex::new),
         });
-        let on_result: OnResult = Arc::new(move |seg: Segment, text: String| {
-            if writer
-                .add(&seg.speaker, seg.start_s, &text, Some(seg.end_s))
-                .is_none()
-            {
-                return;
-            }
-            notify_line(on_line.as_ref(), &seg.speaker, seg.start_s, &text);
-        });
+        let on_result: OnResult =
+            Arc::new(move |seg: Segment, text: String, voice: Option<u32>| {
+                if writer
+                    .add_voiced(&seg.speaker, seg.start_s, &text, Some(seg.end_s), voice)
+                    .is_none()
+                {
+                    return;
+                }
+                notify_line(on_line.as_ref(), &seg.speaker, seg.start_s, &text);
+            });
 
-        let mut sources = vec![(mic, cfg.label_me.clone())];
-        sources.extend(others.map(|o| (o, cfg.label_others.clone())));
+        let diar: Option<Diar> = match (&cfg.speakers, &others) {
+            (Some(sp), Some(_)) => Some((
+                sp.embed.clone(),
+                Arc::new(Mutex::new(Diarizer::new(
+                    sp.memory.clone(),
+                    &cfg.label_others,
+                ))),
+            )),
+            _ => None,
+        };
+        let diarizer = diar
+            .as_ref()
+            .zip(cfg.speakers.as_ref())
+            .map(|((_, d), sp)| (d.clone(), sp.prints_dir.clone()));
+        let mut sources = vec![(mic, cfg.label_me.clone(), None)];
+        sources.extend(others.map(|o| (o, cfg.label_others.clone(), diar)));
         let mut level = on_level.map(|l| Arc::new(Mutex::new(l)));
         let mut workers = Vec::new();
-        for (source, label) in sources {
+        for (source, label, lane_diar) in sources {
             let seg_cfg = SegmenterConfig {
                 silence_ms: cfg.silence_ms,
                 max_segment_s: cfg.max_segment_s,
@@ -259,7 +305,7 @@ impl CallSession {
             workers.push(
                 std::thread::Builder::new()
                     .name(format!("carril {label}"))
-                    .spawn(move || lane_worker(rx, segmenter, t0, asr, cb))?,
+                    .spawn(move || lane_worker(rx, segmenter, t0, asr, cb, lane_diar))?,
             );
             let mut lane = Lane {
                 source,
@@ -283,6 +329,7 @@ impl CallSession {
             transcriber,
             workers,
             ticker: Some(ticker),
+            diarizer,
         })
     }
 
@@ -339,7 +386,23 @@ impl CallSession {
             let dropped = self.transcriber.cancel_pending();
             log::warn!("Se cierra la transcripción con {dropped} frases sin transcribir");
         }
-        self.shared.writer.close(chrono::Local::now().naive_local())
+        // la llamada entera: etiquetas finales de cada persona y sus huellas
+        let voices = self.diarizer.as_ref().map(|(d, dir)| {
+            let f = d.lock().unwrap_or_else(|e| e.into_inner()).finish();
+            self.shared.writer.relabel(f.labels);
+            (f.voices, dir.clone())
+        });
+        let path = self
+            .shared
+            .writer
+            .close(chrono::Local::now().naive_local())?;
+        if let Some((voices, dir)) = voices
+            && !voices.is_empty()
+            && let Err(e) = save_call_prints(&dir, &path, voices)
+        {
+            log::warn!("No se pudieron guardar las voces de la llamada: {e}");
+        }
+        Ok(path)
     }
 }
 

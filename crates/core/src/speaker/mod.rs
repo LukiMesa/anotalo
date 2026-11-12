@@ -6,3 +6,4 @@ pub mod diarizer;
 pub mod embed;
 pub mod fbank;
 pub mod memory;
+pub mod naming;
