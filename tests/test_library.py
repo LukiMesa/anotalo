@@ -166,3 +166,13 @@ def test_reads_anotalo_title_and_marks():
     assert rec.kind == "call" and rec.app == "Teams"
     assert [(l.speaker, l.text) for l in rec.lines] == [("Otros", "Hola, ¿empezamos?"), ("Yo", "Sí, adelante.")]
     assert rec.duration_s == 53
+
+
+def test_reads_anotalo_named_speakers():
+    """Un archivo de Anotalo con personas separadas y nombradas se sigue leyendo en la app de Python."""
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parents[1] / "crates" / "core" / "tests" / "fixtures" / "transcript_rust_speakers.md"
+    rec = parse_recording(fixture)
+    assert [l.speaker for l in rec.lines] == ["María", "Yo", "Persona 1", "María"]
+    assert rec.duration_s == 60

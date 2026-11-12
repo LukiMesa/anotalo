@@ -1,4 +1,5 @@
 //! Port de tests/test_transcript.py, más la comparación byte a byte con la app de Python.
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -361,6 +362,95 @@ fn test_rust_fixture_with_title_and_marks() {
     let got = std::fs::read(w.close(dt(2026, 11, 11, 9, 6, 0)).unwrap()).unwrap();
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/transcript_rust_title_marks.md");
+    let want = std::fs::read(fixture).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&got),
+        String::from_utf8_lossy(&want)
+    );
+}
+
+fn labels(pairs: &[(u32, &str)]) -> HashMap<u32, String> {
+    pairs.iter().map(|(k, v)| (*k, v.to_string())).collect()
+}
+
+#[test]
+fn test_relabel_renames_rows_at_close() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = make(&d, "Teams");
+    w.add_voiced("Otros", 1.0, "Hola.", Some(2.0), Some(0));
+    w.add("Yo", 5.0, "Buenas.", Some(6.0));
+    w.add_voiced("Persona 2", 9.0, "Yo también.", Some(10.0), Some(1));
+    w.relabel(labels(&[(0, "María"), (1, "Persona 1")]));
+    let t = read(&w.close(end()).unwrap());
+    assert!(
+        t.contains("**[00:00:01] María:** Hola.")
+            && t.contains("**[00:00:09] Persona 1:** Yo también."),
+        "{t}"
+    );
+}
+
+#[test]
+fn test_relabel_merges_rows_that_become_the_same_person() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = make(&d, "Teams");
+    w.add_voiced("Otros", 1.0, "Hola", Some(3.0), Some(0));
+    w.add_voiced("Persona 2", 3.5, "qué tal", Some(5.0), Some(1));
+    w.relabel(labels(&[(0, "Otros"), (1, "Otros")]));
+    let t = read(&w.close(end()).unwrap());
+    assert!(t.contains("**[00:00:01] Otros:** Hola qué tal"), "{t}");
+    assert_eq!(t.matches("Otros:**").count(), 1);
+}
+
+#[test]
+fn test_relabel_without_changes_is_byte_identical() {
+    let run = |relabel: bool| {
+        let d = tempfile::tempdir().unwrap();
+        let (w, clock) = make(&d, "Teams");
+        w.add_voiced("Otros", 1.0, "Uno.", Some(2.0), Some(0));
+        clock.set(10.0);
+        w.flush_due();
+        // no se une en vivo: la primera ya estaba escrita
+        w.add_voiced("Otros", 2.5, "Dos.", Some(3.0), Some(1));
+        if relabel {
+            w.relabel(labels(&[(0, "Otros"), (1, "Otros")]));
+        }
+        std::fs::read(w.close(end()).unwrap()).unwrap()
+    };
+    assert_eq!(run(true), run(false));
+}
+
+#[test]
+fn test_mark_still_breaks_merges_after_relabel() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = make(&d, "Teams");
+    w.add_voiced("Otros", 1.0, "Antes", Some(2.0), Some(0));
+    w.add_mark(2.2);
+    w.add_voiced("Persona 2", 2.5, "después", Some(4.0), Some(1));
+    w.relabel(labels(&[(0, "Persona 1"), (1, "Persona 1")]));
+    let t = read(&w.close(end()).unwrap());
+    assert_eq!(t.matches("Persona 1:**").count(), 2, "{t}");
+}
+
+#[test]
+fn test_rust_fixture_with_speakers() {
+    let d = tempfile::tempdir().unwrap();
+    let clock = Clock::default();
+    let w = TranscriptWriter::new(
+        d.path(),
+        "Teams",
+        dt(2026, 11, 12, 10, 0, 0),
+        None,
+        clock.boxed(),
+    )
+    .unwrap();
+    w.add_voiced("Otros", 1.2, "Hola, soy María.", Some(2.5), Some(0));
+    w.add("Yo", 3.0, "Encantado.", Some(3.8));
+    w.add_voiced("Persona 2", 6.0, "Y yo Juan.", Some(7.0), Some(1));
+    w.add_voiced("Persona 1", 9.0, "Empezamos.", Some(9.8), Some(2));
+    w.relabel(labels(&[(0, "María"), (1, "Persona 1"), (2, "María")]));
+    let got = std::fs::read(w.close(dt(2026, 11, 12, 10, 1, 0)).unwrap()).unwrap();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/transcript_rust_speakers.md");
     let want = std::fs::read(fixture).unwrap();
     assert_eq!(
         String::from_utf8_lossy(&got),

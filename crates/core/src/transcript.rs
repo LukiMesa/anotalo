@@ -5,6 +5,7 @@
 //! disco: si la app se cae, lo ya escrito queda guardado. El archivo resultante es idéntico, byte a
 //! byte, al de la app de Python (lo comprueba tests/transcript.rs).
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -29,6 +30,8 @@ struct Pending {
     arrived: f64,
     /// Una marca (`**[HH:MM:SS] Marca**`), no una frase.
     mark: bool,
+    /// Los segmentos de voz de "Otros" que forman la línea (para la etiqueta final).
+    voices: Vec<u32>,
 }
 
 impl Pending {
@@ -46,28 +49,93 @@ impl Pending {
 }
 
 /// Una línea ya escrita en el archivo.
+#[derive(Clone)]
 struct Row {
     line: String,
+    speaker: String,
+    text: String,
     start_s: f64,
+    end_s: f64,
     mark: bool,
+    voices: Vec<u32>,
 }
 
-/// El orden final: las frases tal como se escribieron y cada marca justo antes de la primera frase
-/// que empezó después de ella. Una frase larga llega al archivo al terminar de transcribirse, a
-/// veces después de una marca pulsada mientras se decía: la marca va detrás de esa frase.
-fn in_final_order(rows: &[Row]) -> Vec<&str> {
-    let mut marks: Vec<&Row> = rows.iter().filter(|r| r.mark).collect();
-    marks.sort_by(|a, b| a.start_s.total_cmp(&b.start_s));
+impl Row {
+    fn render(&mut self) {
+        self.line = format!(
+            "**[{}] {}:** {}",
+            fmt_elapsed(self.start_s),
+            self.speaker,
+            self.text
+        );
+    }
+}
+
+/// El orden final (índices): las frases tal como se escribieron y cada marca justo antes de la
+/// primera frase que empezó después de ella. Una frase larga llega al archivo al terminar de
+/// transcribirse, a veces después de una marca pulsada mientras se decía: la marca va detrás.
+fn final_order(rows: &[Row]) -> Vec<usize> {
+    let mut marks: Vec<usize> = (0..rows.len()).filter(|&i| rows[i].mark).collect();
+    marks.sort_by(|&a, &b| rows[a].start_s.total_cmp(&rows[b].start_s));
     let mut marks = marks.into_iter().peekable();
     let mut out = Vec::with_capacity(rows.len());
-    for r in rows.iter().filter(|r| !r.mark) {
-        while let Some(m) = marks.next_if(|m| m.start_s < r.start_s) {
-            out.push(m.line.as_str());
+    for i in (0..rows.len()).filter(|&i| !rows[i].mark) {
+        while let Some(m) = marks.next_if(|&m| rows[m].start_s < rows[i].start_s) {
+            out.push(m);
         }
-        out.push(r.line.as_str());
+        out.push(i);
     }
-    out.extend(marks.map(|m| m.line.as_str()));
+    out.extend(marks);
     out
+}
+
+fn in_final_order(rows: &[Row]) -> Vec<&str> {
+    final_order(rows)
+        .into_iter()
+        .map(|i| rows[i].line.as_str())
+        .collect()
+}
+
+/// Las líneas con las etiquetas finales de las voces (spec §2.4.5). Cada línea con voces toma la
+/// etiqueta de la primera; si así no cambia ninguna, el archivo queda exactamente igual. Si cambia
+/// alguna, las líneas seguidas de la misma persona (sin nada entre ellas y a menos de
+/// `MERGE_GAP_S`) se unen, como en vivo.
+fn relabeled(rows: &[Row], labels: &HashMap<u32, String>) -> Option<Vec<String>> {
+    let new_speaker = |r: &Row| -> Option<String> {
+        let first = r.voices.first()?;
+        let l = labels.get(first)?;
+        (!r.mark && *l != r.speaker).then(|| l.clone())
+    };
+    if !rows.iter().any(|r| new_speaker(r).is_some()) {
+        return None;
+    }
+    let mut out: Vec<Row> = Vec::with_capacity(rows.len());
+    for i in final_order(rows) {
+        let mut r = rows[i].clone();
+        if let Some(s) = new_speaker(&r) {
+            r.speaker = s;
+            r.render();
+        }
+        let joins = out.last().is_some_and(|p| {
+            !r.mark
+                && !p.mark
+                && !r.voices.is_empty()
+                && !p.voices.is_empty()
+                && p.speaker == r.speaker
+                && r.start_s >= p.start_s
+                && r.start_s - p.end_s < MERGE_GAP_S
+        });
+        if joins {
+            let p = out.last_mut().expect("hay una anterior");
+            p.text = format!("{} {}", p.text, r.text);
+            p.end_s = p.end_s.max(r.end_s);
+            p.voices.extend(r.voices);
+            p.render();
+        } else {
+            out.push(r);
+        }
+    }
+    Some(out.into_iter().map(|r| r.line).collect())
 }
 
 struct State {
@@ -75,6 +143,8 @@ struct State {
     pending: Vec<Pending>,
     written: Vec<Row>,
     written_texts: Vec<String>,
+    /// Etiquetas finales de las voces, para `close`.
+    labels: Option<HashMap<u32, String>>,
     closed: bool,
 }
 
@@ -112,6 +182,7 @@ impl TranscriptWriter {
                 pending: Vec::new(),
                 written: Vec::new(),
                 written_texts: Vec::new(),
+                labels: None,
                 closed: false,
             }),
         };
@@ -160,6 +231,19 @@ impl TranscriptWriter {
         text: &str,
         end_s: Option<f64>,
     ) -> Option<String> {
+        self.add_voiced(speaker, start_s, text, end_s, None)
+    }
+
+    /// Como `add`, con el segmento de voz de "Otros" del que sale la frase (su etiqueta final se
+    /// pone al cerrar, con `relabel`).
+    pub fn add_voiced(
+        &self,
+        speaker: &str,
+        start_s: f64,
+        text: &str,
+        end_s: Option<f64>,
+        voice: Option<u32>,
+    ) -> Option<String> {
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
         if text.is_empty() {
             return None;
@@ -188,6 +272,7 @@ impl TranscriptWriter {
                 let l = &mut st.pending[j];
                 l.text = format!("{} {}", l.text, text);
                 l.end_s = l.end_s.max(end_s);
+                l.voices.extend(voice);
                 // "arrived" se queda en la primera llegada: así una racha larga llega a disco a tiempo.
             }
             None => {
@@ -199,6 +284,7 @@ impl TranscriptWriter {
                     text: text.clone(),
                     arrived,
                     mark: false,
+                    voices: voice.into_iter().collect(),
                 });
             }
         }
@@ -220,6 +306,7 @@ impl TranscriptWriter {
             text: String::new(),
             arrived,
             mark: true,
+            voices: Vec::new(),
         };
         let line = mark.render();
         st.pending.push(mark);
@@ -246,6 +333,11 @@ impl TranscriptWriter {
         }
     }
 
+    /// Las etiquetas finales de las voces de "Otros" (por segmento), que `close` aplica.
+    pub fn relabel(&self, labels: HashMap<u32, String>) {
+        self.state.lock().unwrap().labels = Some(labels);
+    }
+
     /// Escribe lo pendiente y reescribe el archivo con la cabecera final (fin y duración).
     pub fn close(&self, ended_at: NaiveDateTime) -> io::Result<PathBuf> {
         let mut st = self.state.lock().unwrap();
@@ -256,10 +348,14 @@ impl TranscriptWriter {
         let items: Vec<Pending> = std::mem::take(&mut st.pending);
         let _ = emit(&mut st, &items);
         st.file = None; // cerrar antes de reemplazarlo
-        let body: String = in_final_order(&st.written)
-            .iter()
-            .map(|r| format!("{r}\n\n"))
-            .collect();
+        let lines: Vec<String> = match st.labels.as_ref().and_then(|l| relabeled(&st.written, l)) {
+            Some(lines) => lines,
+            None => in_final_order(&st.written)
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        };
+        let body: String = lines.iter().map(|r| format!("{r}\n\n")).collect();
         let tmp = self.path.with_extension("tmp");
         let mut f = File::create(&tmp)?;
         write_synced(&mut f, &(self.header(Some(ended_at)) + &body))?;
@@ -305,8 +401,12 @@ fn emit(st: &mut State, items: &[Pending]) -> io::Result<()> {
     st.written
         .extend(items.iter().zip(&rendered).map(|(p, line)| Row {
             line: line.clone(),
+            speaker: p.speaker.clone(),
+            text: p.text.clone(),
             start_s: p.start_s,
+            end_s: p.end_s,
             mark: p.mark,
+            voices: p.voices.clone(),
         }));
     st.written_texts
         .extend(items.iter().filter(|p| !p.mark).map(|p| p.text.clone()));
