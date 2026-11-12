@@ -12,6 +12,7 @@ regex = "1"
 rubato = "5.0.1"
 sha2 = "0.10"
 tract-onnx = "=0.23.10"
+ureq = { version = "3.5.1", default-features = false, features = ["native-tls-no-default"] }
 
 [dev-dependencies]
 hound = "3"
