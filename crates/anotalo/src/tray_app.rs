@@ -229,8 +229,12 @@ fn detector(r: AppRef) -> DetectorFactory {
             }
             keys
         });
-        let windows =
-            Box::new(|p: &'static Platform| anotalo_winsys::windows::visible_titles(p.exes));
+        // solo al detectar una llamada; los títulos sirven para casos de prueba de `meeting_title`
+        let windows = Box::new(|p: &'static Platform| {
+            let titles = anotalo_winsys::windows::visible_titles(p.exes);
+            log::info!("Ventanas de {}: {titles:?}", p.name);
+            titles
+        });
         let enabled = Box::new(move |p: &Platform| r.settings().detect_enabled(p.setting));
         let t0 = Instant::now();
         let clock = Box::new(move || t0.elapsed().as_secs_f64());
@@ -363,7 +367,10 @@ impl Shell {
         };
         *slot = None; // quita el anterior, si lo había
         match Tray::new(self.hwnd()) {
-            Ok(t) => *slot = Some(t),
+            Ok(t) => {
+                log::info!("Icono en la bandeja");
+                *slot = Some(t);
+            }
             Err(e) => log::warn!("{e}; se reintenta cuando arranque el Explorador"),
         }
         drop(slot);
