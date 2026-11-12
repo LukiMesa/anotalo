@@ -457,3 +457,17 @@ fn test_rust_fixture_with_speakers() {
         String::from_utf8_lossy(&want)
     );
 }
+
+#[test]
+fn test_voices_lists_the_segments_with_lines() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, clock) = make(&d, "Teams");
+    w.add_voiced("Otros", 1.0, "Uno", Some(2.0), Some(3));
+    w.add_voiced("Otros", 2.5, "dos", Some(3.0), Some(4)); // se une a la anterior
+    w.add("Yo", 6.0, "Tres", Some(7.0));
+    clock.set(20.0);
+    w.flush_due();
+    w.add_voiced("Otros", 9.0, "Cuatro", Some(10.0), Some(7));
+    w.add_voiced("Otros", 12.0, "  ", Some(13.0), Some(8)); // sin texto: no hay línea
+    assert_eq!(w.voices(), std::collections::HashSet::from([3, 4, 7]));
+}

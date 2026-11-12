@@ -5,7 +5,7 @@
 //! disco: si la app se cae, lo ya escrito queda guardado. El archivo resultante es idéntico, byte a
 //! byte, al de la app de Python (lo comprueba tests/transcript.rs).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -331,6 +331,16 @@ impl TranscriptWriter {
             // Si falla el disco se reintenta al cerrar (el texto sigue en memoria).
             let _ = emit(&mut st, &items);
         }
+    }
+
+    /// Los segmentos de voz que dejaron alguna línea (escrita o pendiente).
+    pub fn voices(&self) -> HashSet<u32> {
+        let st = self.state.lock().unwrap();
+        st.written
+            .iter()
+            .flat_map(|r| r.voices.iter().copied())
+            .chain(st.pending.iter().flat_map(|p| p.voices.iter().copied()))
+            .collect()
     }
 
     /// Las etiquetas finales de las voces de "Otros" (por segmento), que `close` aplica.

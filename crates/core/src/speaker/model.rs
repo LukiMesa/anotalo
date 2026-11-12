@@ -56,8 +56,12 @@ impl SpeakerModel {
     }
 
     fn load(&self) {
-        let result = ensure_titanet(&self.dir, self.fetch.as_ref(), &mut |_| {})
-            .and_then(|path| Embedder::load(&path));
+        let result = ensure_titanet(&self.dir, self.fetch.as_ref(), &mut |_| {}).and_then(|path| {
+            // un archivo del tamaño correcto que no carga está dañado: se borra para descargarlo
+            Embedder::load(&path).inspect_err(|_| {
+                let _ = std::fs::remove_file(&path);
+            })
+        });
         let next = match result {
             Ok(e) => {
                 log::info!("Modelo de voces listo");

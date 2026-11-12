@@ -42,3 +42,26 @@ fn test_failed_download_leaves_no_model_and_retries() {
     assert!(m.get().is_none());
     assert_eq!(f.calls(), 2);
 }
+
+/// Un modelo del tamaño correcto pero dañado (no carga) se borra: la siguiente vez se descarga.
+#[test]
+fn test_unloadable_model_is_deleted_and_downloaded_again() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join(anotalo_core::models::TITANET.file);
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(anotalo_core::models::TITANET.size)
+        .unwrap();
+    let f = Arc::new(CountingFetch {
+        data: b"no es el modelo".to_vec(),
+        calls: AtomicUsize::new(0),
+    });
+    let m = SpeakerModel::new(d.path().to_path_buf(), f.clone());
+    m.ensure();
+    assert!(m.wait_idle(Duration::from_secs(30)));
+    assert!(m.get().is_none());
+    assert!(!path.exists(), "el modelo que no carga se borra");
+    m.ensure();
+    assert!(m.wait_idle(Duration::from_secs(30)));
+    assert_eq!(f.calls(), 1, "y la siguiente vez se descarga");
+}

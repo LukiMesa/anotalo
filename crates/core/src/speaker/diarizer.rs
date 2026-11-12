@@ -3,7 +3,7 @@
 //! llamada entera, se buscan las voces guardadas y salen las etiquetas finales y las huellas de
 //! cada persona de la llamada (para poder nombrarla después).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,9 @@ pub struct CallVoice {
     /// Huella centrada y de norma 1 (media de sus segmentos, ponderada por duración).
     pub print: Vec<f32>,
     pub seconds: f64,
+    /// El usuario le puso este nombre (con `nombrar`); si lo corrige, se corrige la voz guardada.
+    #[serde(default)]
+    pub named: bool,
 }
 
 pub struct Finished {
@@ -80,8 +83,18 @@ impl Diarizer {
 
     /// Agrupa la llamada entera y pone los nombres guardados que se reconozcan.
     pub fn finish(&self) -> Finished {
+        self.finish_where(|_| true)
+    }
+
+    /// Como `finish`, contando solo los segmentos que dejaron una línea en la transcripción: la
+    /// música en espera o el ruido sin texto no son una persona más.
+    pub fn finish_with_lines(&self, ids: &HashSet<u32>) -> Finished {
+        self.finish_where(|i| ids.contains(&i))
+    }
+
+    fn finish_where(&self, keep: impl Fn(u32) -> bool) -> Finished {
         let with: Vec<usize> = (0..self.segments.len())
-            .filter(|&i| self.segments[i].emb.is_some())
+            .filter(|&i| self.segments[i].emb.is_some() && keep(i as u32))
             .collect();
         if with.is_empty() {
             return Finished {
@@ -137,6 +150,7 @@ impl Diarizer {
                 label: label.clone(),
                 print: weighted_centroid(&embs, &durs, m),
                 seconds: m.iter().map(|&j| durs[j]).sum(),
+                named: false,
             })
             .collect();
         log::info!(

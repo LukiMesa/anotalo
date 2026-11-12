@@ -388,7 +388,12 @@ impl CallSession {
         }
         // la llamada entera: etiquetas finales de cada persona y sus huellas
         let voices = self.diarizer.as_ref().map(|(d, dir)| {
-            let f = d.lock().unwrap_or_else(|e| e.into_inner()).finish();
+            // solo cuentan las voces que dejaron alguna línea (no la música en espera, el ruido…)
+            let with_lines = self.shared.writer.voices();
+            let f = d
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .finish_with_lines(&with_lines);
             self.shared.writer.relabel(f.labels);
             (f.voices, dir.clone())
         });

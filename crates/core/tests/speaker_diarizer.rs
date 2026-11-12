@@ -74,9 +74,14 @@ fn test_finish_uses_stored_names() {
         (f.labels[&0].as_str(), f.labels[&1].as_str()),
         ("Persona 1", "María")
     );
-    let mut one = Diarizer::new(vec![maria], "Otros");
+    // una sola persona (dos segmentos: uno solo no basta para poner nombre)
+    let mut one = Diarizer::new(vec![maria.clone()], "Otros");
     one.add(0.0, 4.0, Some(voice(1, 0)));
+    one.add(5.0, 9.0, Some(voice(1, 1)));
     assert_eq!(one.finish().labels[&0], "María");
+    let mut single = Diarizer::new(vec![maria], "Otros");
+    single.add(0.0, 4.0, Some(voice(1, 0)));
+    assert_eq!(single.finish().labels[&0], "Otros");
 }
 
 #[test]
@@ -118,4 +123,27 @@ fn test_no_embeddings_at_all() {
     d.add(0.0, 0.2, None);
     let f = d.finish();
     assert_eq!((f.labels[&0].as_str(), f.voices.len()), ("Otros", 0));
+}
+
+/// Una sola persona y 15 s de música en espera (segmentos sin texto): la música no cuenta como
+/// persona y el archivo sigue diciendo "Otros".
+#[test]
+fn test_clusters_without_lines_do_not_count() {
+    let mut d = Diarizer::new(vec![], "Otros");
+    let mut with_lines = std::collections::HashSet::new();
+    for (i, k) in [0, 5, 0, 5, 0, 5, 0].iter().enumerate() {
+        let t = i as f64 * 6.0;
+        let (id, _) = d.add(t, t + 5.0, Some(voice(*k, i)));
+        if *k == 0 {
+            with_lines.insert(id);
+        }
+    }
+    assert_ne!(
+        d.finish().labels[&0],
+        "Otros",
+        "sin filtrar, la música es otra persona"
+    );
+    let f = d.finish_with_lines(&with_lines);
+    assert!(with_lines.iter().all(|i| f.labels[i] == "Otros"));
+    assert_eq!(f.voices.len(), 1);
 }
