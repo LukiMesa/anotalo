@@ -28,9 +28,12 @@ use anotalo_core::engine::whisper_factory;
 use anotalo_core::model::{ModelConfig, ModelGate, ModelManager, igpu_check_needed};
 use anotalo_core::models::{HttpFetch, choose, models_dir};
 use anotalo_core::notify::Notifier;
-use anotalo_core::paths;
+use anotalo_core::paths::{self, Profile};
 use anotalo_core::routing::Platform;
-use anotalo_core::session::{CallSession, OnLevel, OnLine, SessionConfig, SourceFactory};
+use anotalo_core::session::{CallSession, OnLevel, OnLine, SessionConfig, SourceFactory, Speakers};
+use anotalo_core::speaker::memory::{VoiceStore, voices_path};
+use anotalo_core::speaker::model::SpeakerModel;
+use anotalo_core::speaker::naming::{KEEP_CALL_PRINTS, prune_call_prints};
 use anotalo_core::vad::Vad;
 use anotalo_winaudio::coreaudio::{self, Snapshot};
 use anotalo_winaudio::sources::{pick_mic, pick_others};
@@ -51,6 +54,7 @@ use crate::shell::hotkeys::{HotkeyId, Hotkeys};
 use crate::shell::indicator::{Indicator, IndicatorWiring, Pill};
 use crate::shell::tray::{Tray, TrayCommand, WM_APP_TRAY, menu_items};
 use crate::shell::window::{self, Handler, WM_APP_EVENT, WM_APP_QUIT_DONE};
+use crate::voices_cli::prints_dir;
 
 /// Cada 30 s se mira si el modelo lleva tiempo sin usarse (para liberarlo).
 const MODEL_TIMER: usize = 1;
@@ -109,10 +113,37 @@ impl Recording for Live {
     }
 }
 
-fn sessions(r: AppRef, model: Arc<ModelManager>) -> SessionFactory {
+/// Para una llamada: el modelo de voces si ya está listo (si no, se graba sin separar y se
+/// sigue preparando para la siguiente).
+fn speakers_for_call(voices: &Arc<SpeakerModel>, profile: Profile) -> Option<Speakers> {
+    voices.ensure();
+    match voices.get() {
+        Some(embed) => Some(Speakers {
+            embed,
+            memory: VoiceStore::load(&voices_path(profile)).voices,
+            prints_dir: prints_dir(profile),
+        }),
+        None => {
+            log::info!("Separación de voces aún no disponible: esta llamada se graba sin separar");
+            None
+        }
+    }
+}
+
+fn sessions(
+    r: AppRef,
+    model: Arc<ModelManager>,
+    voices: Arc<SpeakerModel>,
+    profile: Profile,
+) -> SessionFactory {
     Box::new(move |req: SessionRequest, events: EventSink| {
         let s = r.settings();
         let transcriber = model.acquire()?;
+        // las notas rápidas son solo el micrófono: no hay "Otros" que separar
+        let speakers = req
+            .others
+            .as_ref()
+            .and_then(|_| speakers_for_call(&voices, profile));
         let platform = req.others.as_ref().and_then(|o| o.platform.clone());
         let mic = pick_mic(platform.as_deref(), s.mic_device.as_deref());
         let (others, again) = match req.others {
@@ -143,7 +174,7 @@ fn sessions(r: AppRef, model: Arc<ModelManager>) -> SessionFactory {
             max_segment_s: s.max_segment_s,
             min_segment_ms: s.min_segment_ms,
             title: req.title,
-            speakers: None,
+            speakers,
         };
         CallSession::start(
             cfg,
@@ -582,6 +613,12 @@ pub fn run() -> ExitCode {
         initial: Arc::new(settings.clone()),
     };
     let model = model_manager(&r, notifier.clone());
+    let pruned = prune_call_prints(&prints_dir(profile), KEEP_CALL_PRINTS);
+    if pruned > 0 {
+        log::info!("Borradas las voces de {pruned} llamadas de hace más de 30 días");
+    }
+    let voices = SpeakerModel::new(models_dir(), Arc::new(HttpFetch::default()));
+    voices.ensure();
     let (tx, rx) = mpsc::channel::<AppEvent>();
     let events: EventSink = Arc::new(move |e| {
         if tx.send(e).is_ok() {
@@ -592,7 +629,7 @@ pub fn run() -> ExitCode {
         settings.clone(),
         AppDeps {
             detector: detector(r.clone()),
-            sessions: sessions(r.clone(), model.clone()),
+            sessions: sessions(r.clone(), model.clone(), voices, profile),
             notifier: notifier.clone(),
             model: model.clone(),
             copy_text: Box::new(clipboard::set_text),

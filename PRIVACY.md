@@ -21,7 +21,9 @@ Todas son anónimas: no se envía ningún dato tuyo ni de tus llamadas.
 
 - Añade el ajuste **"Buscar actualizaciones automáticamente"** para desactivar la comprobación periódica.
 - Deja de usar PyPI: no descarga componentes de GPU.
-- Si pones nombre a una persona en una grabación, guarda su **huella de voz** para reconocerla en próximas llamadas. Se guarda solo en tu PC, en `%APPDATA%\Anotalo\voces.json`, y puedes borrarla desde Ajustes.
+- Si pones nombre a una persona en una grabación, guarda su **huella de voz** para reconocerla en próximas llamadas. Se guarda solo en tu PC, en `%APPDATA%\Anotalo\voces.json`, y puedes borrarla desde Ajustes (hasta que existan, con `anotalo voces borrar <nombre>`).
+- Para poder nombrar a alguien después de colgar, cada llamada guarda las huellas de voz de sus participantes durante **30 días** en `%APPDATA%\Anotalo\llamadas`; pasado ese tiempo se borran solas. Nunca salen de tu PC.
+- Descarga una vez el modelo que separa las voces (40 MB) de GitHub, de la publicación de [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx); como en las demás descargas, GitHub ve tu dirección IP.
 
 ## Políticas de los servicios que usa
 
@@ -54,7 +56,9 @@ All of them are anonymous: no data about you or your calls is sent.
 
 - Adds the setting **"Buscar actualizaciones automáticamente"** to turn off the periodic check.
 - Stops using PyPI: it downloads no GPU components.
-- If you name a person in a recording, it stores their **voice print** to recognise them in later calls. It is stored only on your PC, in `%APPDATA%\Anotalo\voces.json`, and can be deleted from Ajustes.
+- If you name a person in a recording, it stores their **voice print** to recognise them in later calls. It is stored only on your PC, in `%APPDATA%\Anotalo\voces.json`, and can be deleted from Ajustes (until then, with `anotalo voces borrar <nombre>`).
+- So you can name someone after hanging up, each call keeps its participants' voice prints for **30 days** in `%APPDATA%\Anotalo\llamadas`; after that they are deleted automatically. They never leave your PC.
+- It downloads the voice-separation model (40 MB) once from GitHub, from the [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) release; as with the other downloads, GitHub sees your IP address.
 
 ## Policies of the services it uses
 
