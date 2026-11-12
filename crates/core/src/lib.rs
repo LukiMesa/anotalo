@@ -16,5 +16,6 @@ pub mod routing;
 pub mod segmenter;
 pub mod session;
 pub mod source;
+pub mod speaker;
 pub mod transcript;
 pub mod vad;

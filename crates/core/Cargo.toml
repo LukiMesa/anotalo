@@ -10,6 +10,7 @@ audioadapter-buffers = "5.1"
 chrono = "0.4"
 hound = "3"
 log = "0.4"
+realfft = "3.5"
 regex = "1"
 rubato = "5.0.1"
 serde = { version = "1", features = ["derive"] }
