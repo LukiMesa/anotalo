@@ -166,30 +166,67 @@ pub fn config_path(p: Profile) -> PathBuf {
     data_dir(p).join("config.json")
 }
 
+/// Por qué no se pudo usar un `config.json` que existe (se cargan los valores por defecto).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadProblem {
+    /// No es JSON (o no es un objeto). Se copió tal cual a `backup` (None si la copia falló).
+    Damaged { backup: Option<PathBuf> },
+    /// Existe pero no se pudo leer (bloqueado, sin permiso): no se debe guardar encima.
+    Unreadable(String),
+}
+
+/// Intentos de lectura: un antivirus o OneDrive pueden tener el archivo bloqueado un momento.
+const READ_TRIES: u32 = 3;
+
 /// Nunca falla: sin archivo, o si no es un objeto JSON, valores por defecto. Cada clave se lee por
 /// separado: una con un tipo que no toca se queda con su valor por defecto y las demás se conservan.
 pub fn load_settings(path: &Path, p: Profile) -> Settings {
+    load_settings_checked(path, p).0
+}
+
+/// Como `load_settings`, y además dice si había un archivo que no se pudo usar. Uno dañado se copia
+/// a `config.json.bad` antes de que el siguiente guardado lo sobrescriba.
+pub fn load_settings_checked(path: &Path, p: Profile) -> (Settings, Option<LoadProblem>) {
     let mut s = Settings::defaults(p);
-    let bytes = match fs::read(path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return s,
-        Err(e) => {
-            log::warn!(
-                "No se pudo leer {} ({e}); uso valores por defecto",
-                path.display()
-            );
-            return s;
+    let mut tries = 0;
+    let bytes = loop {
+        tries += 1;
+        match fs::read(path) {
+            Ok(b) => break b,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return (s, None),
+            Err(e) if tries < READ_TRIES => {
+                log::debug!("No se pudo leer {} ({e}); reintento", path.display());
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => {
+                log::warn!(
+                    "No se pudo leer {} ({e}); uso valores por defecto",
+                    path.display()
+                );
+                return (s, Some(LoadProblem::Unreadable(e.to_string())));
+            }
         }
     };
     let text = String::from_utf8_lossy(&bytes);
     let mut map = match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
         Ok(Value::Object(m)) => m,
         Ok(_) | Err(_) => {
+            let bad = path.with_extension("json.bad");
+            let backup = match fs::write(&bad, &bytes) {
+                Ok(()) => Some(bad),
+                Err(e) => {
+                    log::error!("No se pudo copiar a {} ({e})", bad.display());
+                    None
+                }
+            };
             log::warn!(
-                "Config inválida en {}; uso valores por defecto",
-                path.display()
+                "Config inválida en {}; uso valores por defecto (copia en {})",
+                path.display(),
+                backup
+                    .as_ref()
+                    .map_or("ninguna".into(), |b| b.display().to_string())
             );
-            return s;
+            return (s, Some(LoadProblem::Damaged { backup }));
         }
     };
     // Versiones anteriores de la app de Python.
@@ -217,7 +254,7 @@ pub fn load_settings(path: &Path, p: Profile) -> Settings {
     }
     with_settings_fields!(take);
     s.extra = map;
-    s
+    (s, None)
 }
 
 /// `bool(x)` de Python para lo que pudiera haber en `detect_meet`.

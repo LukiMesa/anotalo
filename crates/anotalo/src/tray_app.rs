@@ -18,7 +18,9 @@ use anotalo_core::app::{
     State,
 };
 use anotalo_core::applog;
-use anotalo_core::config::{Settings, config_path, load_settings, migrate_legacy, save_settings};
+use anotalo_core::config::{
+    LoadProblem, Settings, config_path, load_settings_checked, migrate_legacy, save_settings,
+};
 use anotalo_core::detector::{
     CallDetector, DetectorControl, DetectorHandle, MicProbe, POLL, Probes,
 };
@@ -522,13 +524,36 @@ pub fn run() -> ExitCode {
         Err(e) => log::warn!("No se pudieron copiar los ajustes de Transcriptor: {e}"),
     }
     let cfg_path = config_path(profile);
-    let settings = load_settings(&cfg_path, profile);
+    let (settings, problem) = load_settings_checked(&cfg_path, profile);
     if let Err(e) = toast::register_aumid(toast::AUMID, "Anotalo")
         .and_then(|()| toast::set_process_aumid(toast::AUMID))
     {
         log::warn!("Los avisos pueden no verse: {e}");
     }
     let notifier: Arc<dyn Notifier> = Arc::new(Toasts);
+    // un archivo que no se pudo leer no se sobrescribe con los valores por defecto
+    let can_save = !matches!(problem, Some(LoadProblem::Unreadable(_)));
+    match &problem {
+        None => {}
+        Some(LoadProblem::Damaged { backup: Some(b) }) => notifier.notify(
+            "Ajustes dañados",
+            &format!(
+                "Uso los de por defecto. Tu archivo está copiado en {}",
+                b.display()
+            ),
+            None,
+        ),
+        Some(LoadProblem::Damaged { backup: None }) => notifier.notify(
+            "Ajustes dañados",
+            "Uso los de por defecto. Revisa app.log",
+            None,
+        ),
+        Some(LoadProblem::Unreadable(_)) => notifier.notify(
+            "No se pudieron leer los ajustes",
+            "Uso los de por defecto y no guardaré cambios hasta reiniciar. Revisa app.log",
+            None,
+        ),
+    }
 
     let missing = anotalo_whisper::missing_cpu_features();
     if !missing.is_empty() {
@@ -571,7 +596,12 @@ pub fn run() -> ExitCode {
             model: model.clone(),
             copy_text: Box::new(clipboard::set_text),
             events,
-            save: Box::new(move |s| save_settings(s, &cfg_path).map_err(|e| e.to_string())),
+            save: Box::new(move |s| {
+                if !can_save {
+                    return Err("los ajustes no se pudieron leer al arrancar".into());
+                }
+                save_settings(s, &cfg_path).map_err(|e| e.to_string())
+            }),
         },
     );
     let _ = r.cell.set(Arc::downgrade(&app));

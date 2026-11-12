@@ -802,15 +802,31 @@ fn test_hotkey_while_saving_does_not_start_a_second_session() {
     let second = std::thread::spawn(move || app.toggle()); // se pulsa otra vez mientras se guarda
     first.join().unwrap();
     second.join().unwrap();
+    // la pulsación era para parar la que se estaba guardando: no se repite al terminar
     let ends = h.stop_ends.lock().unwrap().clone();
     let sessions = h.sessions.lock().unwrap().clone();
-    assert!(sessions.len() <= 2);
-    if sessions.len() == 2 {
-        assert!(
-            sessions[1].at >= ends[0],
-            "la segunda empezó antes de cerrarse la primera"
-        );
-    }
+    assert_eq!(
+        (sessions.len(), ends.len()),
+        (1, 1),
+        "una nota y un guardado"
+    );
+    assert!(sessions[0].at < ends[0]);
+    assert_eq!(h.app.state(), State::Armed);
+}
+
+#[test]
+fn test_record_call_while_saving_does_not_start_a_session() {
+    let h = h();
+    *h.stop_delay.lock().unwrap() = Duration::from_millis(300);
+    h.app.toggle_call();
+    let app = h.app.clone();
+    let first = std::thread::spawn(move || app.toggle_call());
+    std::thread::sleep(Duration::from_millis(50));
+    let app = h.app.clone();
+    let second = std::thread::spawn(move || app.toggle_call());
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(h.sessions.lock().unwrap().len(), 1);
 }
 
 #[test]

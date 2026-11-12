@@ -45,10 +45,35 @@ impl Pending {
     }
 }
 
+/// Una línea ya escrita en el archivo.
+struct Row {
+    line: String,
+    start_s: f64,
+    mark: bool,
+}
+
+/// El orden final: las frases tal como se escribieron y cada marca justo antes de la primera frase
+/// que empezó después de ella. Una frase larga llega al archivo al terminar de transcribirse, a
+/// veces después de una marca pulsada mientras se decía: la marca va detrás de esa frase.
+fn in_final_order(rows: &[Row]) -> Vec<&str> {
+    let mut marks: Vec<&Row> = rows.iter().filter(|r| r.mark).collect();
+    marks.sort_by(|a, b| a.start_s.total_cmp(&b.start_s));
+    let mut marks = marks.into_iter().peekable();
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows.iter().filter(|r| !r.mark) {
+        while let Some(m) = marks.next_if(|m| m.start_s < r.start_s) {
+            out.push(m.line.as_str());
+        }
+        out.push(r.line.as_str());
+    }
+    out.extend(marks.map(|m| m.line.as_str()));
+    out
+}
+
 struct State {
     file: Option<File>,
     pending: Vec<Pending>,
-    written: Vec<String>,
+    written: Vec<Row>,
     written_texts: Vec<String>,
     closed: bool,
 }
@@ -231,7 +256,10 @@ impl TranscriptWriter {
         let items: Vec<Pending> = std::mem::take(&mut st.pending);
         let _ = emit(&mut st, &items);
         st.file = None; // cerrar antes de reemplazarlo
-        let body: String = st.written.iter().map(|r| format!("{r}\n\n")).collect();
+        let body: String = in_final_order(&st.written)
+            .iter()
+            .map(|r| format!("{r}\n\n"))
+            .collect();
         let tmp = self.path.with_extension("tmp");
         let mut f = File::create(&tmp)?;
         write_synced(&mut f, &(self.header(Some(ended_at)) + &body))?;
@@ -244,7 +272,10 @@ impl TranscriptWriter {
     /// Transcripción completa hasta ahora (escrita + pendiente), para copiar.
     pub fn text(&self) -> String {
         let st = self.state.lock().unwrap();
-        let mut lines = st.written.clone();
+        let mut lines: Vec<String> = in_final_order(&st.written)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
         lines.extend(sorted_pending(&st).iter().map(|p| p.render()));
         lines.join("\n\n")
     }
@@ -271,7 +302,12 @@ fn sorted_pending(st: &State) -> Vec<&Pending> {
 
 fn emit(st: &mut State, items: &[Pending]) -> io::Result<()> {
     let rendered: Vec<String> = items.iter().map(Pending::render).collect();
-    st.written.extend(rendered.iter().cloned());
+    st.written
+        .extend(items.iter().zip(&rendered).map(|(p, line)| Row {
+            line: line.clone(),
+            start_s: p.start_s,
+            mark: p.mark,
+        }));
     st.written_texts
         .extend(items.iter().filter(|p| !p.mark).map(|p| p.text.clone()));
     let chunk: String = rendered.iter().map(|r| format!("{r}\n\n")).collect();

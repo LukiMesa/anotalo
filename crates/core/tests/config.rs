@@ -2,7 +2,9 @@
 //! archivos de la app de Python (fixtures de scripts/fixtures/config_reference.py).
 use std::path::{Path, PathBuf};
 
-use anotalo_core::config::{Settings, load_settings, migrate_legacy_in, save_settings};
+use anotalo_core::config::{
+    LoadProblem, Settings, load_settings, load_settings_checked, migrate_legacy_in, save_settings,
+};
 use anotalo_core::paths::{
     Profile, data_dir_in, default_output_dir_in, instance_names, legacy_data_dir_in, profile_from,
 };
@@ -313,4 +315,51 @@ fn test_detect_enabled_reads_the_platform_setting() {
     assert!(s.detect_enabled("detect_teams"));
     assert!(!s.detect_enabled("detect_zoom"));
     assert!(!s.detect_enabled("detect_nothing"));
+}
+
+/// Un `config.json` con una coma de más no se pierde: se carga con los valores por defecto, pero
+/// antes se copia tal cual a `config.json.bad` (el siguiente guardado lo sobrescribiría).
+#[test]
+fn test_damaged_config_is_backed_up() {
+    let d = tempfile::tempdir().unwrap();
+    let text = "{
+  \"hotkey\": \"<ctrl>+<alt>+x\",
+}";
+    let p = write(d.path(), "config.json", text);
+    let (s, problem) = load_settings_checked(&p, Profile::Dev);
+    assert_eq!(s, defaults());
+    let bad = d.path().join("config.json.bad");
+    assert_eq!(
+        problem,
+        Some(LoadProblem::Damaged {
+            backup: Some(bad.clone())
+        })
+    );
+    assert_eq!(std::fs::read_to_string(bad).unwrap(), text);
+}
+
+#[test]
+fn test_missing_or_valid_config_is_not_a_problem() {
+    let d = tempfile::tempdir().unwrap();
+    let (_, problem) = load_settings_checked(&d.path().join("config.json"), Profile::Dev);
+    assert_eq!(problem, None);
+    let p = write(d.path(), "config.json", r#"{"hotkey": "<ctrl>+<alt>+x"}"#);
+    let (s, problem) = load_settings_checked(&p, Profile::Dev);
+    assert_eq!((s.hotkey.as_str(), problem), ("<ctrl>+<alt>+x", None));
+    assert!(!d.path().join("config.json.bad").exists());
+}
+
+/// Un archivo que existe pero no se puede leer (aquí, una carpeta con ese nombre) se avisa aparte:
+/// no hay copia posible, y la app no debe guardar encima.
+#[test]
+fn test_unreadable_config_is_reported() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("config.json");
+    std::fs::create_dir(&p).unwrap();
+    let (s, problem) = load_settings_checked(&p, Profile::Dev);
+    assert_eq!(s, defaults());
+    assert!(
+        matches!(problem, Some(LoadProblem::Unreadable(_))),
+        "{problem:?}"
+    );
 }

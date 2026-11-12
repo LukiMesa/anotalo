@@ -313,6 +313,36 @@ fn test_marks_ordered_by_time() {
     assert!(a < b && b < c, "{text}");
 }
 
+/// Una frase larga que se marca a la mitad llega al archivo después de la marca (se transcribe al
+/// acabar): al cerrar, la marca va detrás de la frase que estaba en curso, no antes.
+#[test]
+fn test_mark_written_before_a_late_line_that_started_earlier() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, clock) = make(&d, "Teams");
+    clock.set(19.0);
+    w.add_mark(16.0); // pulsado a los 2 s de una frase que empezó en el 14
+    clock.set(22.5);
+    w.flush_due(); // la marca ya está en disco
+    clock.set(27.0);
+    w.add(
+        "Otros",
+        14.0,
+        "Estamos de acuerdo en el precio.",
+        Some(26.0),
+    );
+    w.add("Yo", 27.0, "Perfecto.", Some(28.0));
+    clock.set(31.0);
+    w.flush_due();
+    let text = read(&w.close(end()).unwrap());
+    let (line, mark, after) = (
+        text.find("Estamos de acuerdo").unwrap(),
+        text.find("Marca").unwrap(),
+        text.find("Perfecto").unwrap(),
+    );
+    assert!(line < mark && mark < after, "{text}");
+    assert!(w.text().find("Estamos").unwrap() < w.text().find("Marca").unwrap());
+}
+
 #[test]
 fn test_rust_fixture_with_title_and_marks() {
     let d = tempfile::tempdir().unwrap();

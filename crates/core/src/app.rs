@@ -130,6 +130,8 @@ struct Data {
     stopping: bool,
     /// Cerrando una grabación (últimas frases).
     busy: bool,
+    /// Grabaciones cerradas hasta ahora (para no repetir una pulsación que esperó a un guardado).
+    saves: u64,
     /// Instalador lanzado: la app se cerrará en segundos.
     updating: bool,
 }
@@ -172,6 +174,7 @@ impl App {
                     kind: None,
                     stopping: false,
                     busy: false,
+                    saves: 0,
                     updating: false,
                 }),
                 detector: (deps.detector)(on_start, on_stop),
@@ -275,10 +278,26 @@ impl App {
 
     // --- acciones ------------------------------------------------------------
 
+    /// Una pulsación de grabar mientras se guarda la anterior era para pararla: no empieza otra, ni
+    /// al momento ni cuando termine de guardarse (cada pulsación va en su hilo y esperaría al
+    /// cerrojo). Devuelve las grabaciones cerradas al pulsar, o None si se estaba guardando.
+    fn press(&self) -> Option<u64> {
+        let d = self.data();
+        (!d.busy).then_some(d.saves)
+    }
+
+    fn saved_since(&self, seen: u64) -> bool {
+        self.data().saves != seen
+    }
+
     /// Atajo y "Nueva nota rápida": para cualquier grabación; si no hay, empieza una nota.
     pub fn toggle(&self) {
+        let Some(seen) = self.press() else { return };
         {
             let _g = self.action.lock();
+            if self.saved_since(seen) {
+                return;
+            }
             if self.data().session.is_some() {
                 self.stop_session(true);
                 return;
@@ -288,8 +307,12 @@ impl App {
     }
 
     pub fn toggle_call(&self) {
+        let Some(seen) = self.press() else { return };
         {
             let _g = self.action.lock();
+            if self.saved_since(seen) {
+                return;
+            }
             if self.data().session.is_some() {
                 self.stop_session(true);
                 return;
@@ -502,7 +525,11 @@ impl App {
                 self.notify("Error al guardar", &e.to_string());
             }
         }
-        self.data().busy = false;
+        {
+            let mut d = self.data();
+            d.busy = false;
+            d.saves += 1;
+        }
         self.emit(AppEvent::SessionEnded {
             path,
             label,
