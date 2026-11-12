@@ -459,8 +459,10 @@ unsafe fn blit(hwnd: HWND, img: &Pixmap, alpha: u8, dy: i32, scale: f32) {
         {
             // tiny-skia: RGBA premultiplicado → Windows: BGRA premultiplicado
             let dst = std::slice::from_raw_parts_mut(bits.cast::<u8>(), (w * h * 4) as usize);
-            for (d, s) in dst.chunks_exact_mut(4).zip(img.data().chunks_exact(4)) {
-                d.copy_from_slice(&[s[2], s[1], s[0], s[3]]);
+            let (dst4, _) = dst.as_chunks_mut::<4>();
+            let (src4, _) = img.data().as_chunks::<4>();
+            for (d, s) in dst4.iter_mut().zip(src4) {
+                *d = [s[2], s[1], s[0], s[3]];
             }
             let old = SelectObject(mem, HGDIOBJ(bmp.0));
             let blend = BLENDFUNCTION {
