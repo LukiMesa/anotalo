@@ -69,3 +69,14 @@ def test_migrates_detect_meet_to_browsers(tmp_path):
     p.write_text(json.dumps({"detect_meet": False, "detect_teams": True}), encoding="utf-8")
     s = load_settings(p)
     assert s.detect_browsers is False and s.detect_teams is True and s.detect_discord is False
+
+
+def test_loads_config_saved_by_anotalo():
+    """Un config.json que guardó Anotalo (Rust) se sigue leyendo en la app de Python."""
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parents[1] / "crates" / "core" / "tests" / "fixtures" / "config_anotalo.json"
+    s = load_settings(fixture)
+    assert s.hotkey == "<ctrl>+<alt>+t"
+    assert s.output_dir == "C:\\Users\\José\\Documents\\Llamadas"
+    assert s.detect_discord is True
