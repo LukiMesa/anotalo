@@ -8,6 +8,7 @@ license.workspace = true
 anotalo-whisper = { path = "../whisper" }
 audioadapter-buffers = "5.1"
 chrono = "0.4"
+hound = "3"
 log = "0.4"
 regex = "1"
 rubato = "5.0.1"

@@ -313,3 +313,53 @@ fn cancel_pending_drops_queued_phrases_so_stop_is_bounded() {
     assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
     assert_eq!(rx.iter().count(), 2);
 }
+
+#[test]
+fn test_jobs_submitted_before_load_completes_are_transcribed() {
+    // El modelo tarda en cargar (se liberó por inactividad): lo dicho mientras tanto no se pierde.
+    let m = FakeAsr::new()
+        .with_text(0.1, "uno")
+        .with_text(0.2, "dos")
+        .with_text(0.3, "tres");
+    let slot = Mutex::new(Some(m));
+    let factory: AsrFactory = Box::new(move |_p| {
+        std::thread::sleep(Duration::from_millis(300));
+        Ok(Box::new(slot.lock().unwrap().take().unwrap()) as Box<dyn Asr>)
+    });
+    let t0 = std::time::Instant::now();
+    let t = Transcriber::spawn(Placement::Cpu, factory, Box::new(|_| {}), Box::new(|_| {}));
+    assert!(
+        t0.elapsed() < Duration::from_millis(100),
+        "spawn no espera a la carga"
+    );
+    assert!(!t.is_loaded());
+    let out = collect(t, vec![seg(0.1, "Yo"), seg(0.2, "Yo"), seg(0.3, "Yo")]);
+    assert_eq!(
+        out.into_iter().map(|x| x.1).collect::<Vec<_>>(),
+        vec!["uno", "dos", "tres"]
+    );
+}
+
+#[test]
+fn test_spawn_load_failure_drops_jobs_and_idles() {
+    let factory: AsrFactory = Box::new(|_p| Err("sin modelo".into()));
+    let (tx, rx) = mpsc::channel();
+    let t = Transcriber::spawn(
+        Placement::Cpu,
+        factory,
+        Box::new(|_| {}),
+        Box::new(move |r| tx.send(r).unwrap()),
+    );
+    t.submit(
+        seg(0.5, "Yo"),
+        Box::new(|_, _| panic!("no debería transcribirse")),
+    );
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Err("sin modelo".into())
+    );
+    assert!(t.wait_idle(Duration::from_secs(1)));
+    t.submit(seg(0.5, "Yo"), Box::new(|_, _| panic!("tampoco esta")));
+    assert!(t.wait_idle(Duration::from_secs(1)));
+    t.stop();
+}

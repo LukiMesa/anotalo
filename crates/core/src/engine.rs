@@ -88,6 +88,10 @@ struct Queue {
     jobs: VecDeque<Job>,
     busy: bool,
     closing: bool,
+    /// El modelo ya está cargado.
+    loaded: bool,
+    /// La carga falló: lo que llegue se descarta.
+    failed: bool,
 }
 
 #[derive(Default)]
@@ -100,50 +104,92 @@ struct Shared {
 pub struct Transcriber {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
-    placement: Placement,
+    placement: Arc<Mutex<Placement>>,
 }
 
 impl Transcriber {
-    /// Carga el motor (en este hilo) y arranca el trabajador. Si falla en la GPU, avisa una vez con
-    /// `on_fallback` y usa el procesador.
+    /// Carga el motor y arranca el trabajador; vuelve cuando el modelo está listo. Si falla en la
+    /// GPU, avisa una vez con `on_fallback` y usa el procesador.
     pub fn start(
         first: Placement,
         factory: AsrFactory,
         on_fallback: Box<dyn Fn(String) + Send>,
     ) -> Result<Transcriber, String> {
-        let (asr, placement) = match factory(first) {
-            Ok(asr) => (asr, first),
-            Err(e) if first != Placement::Cpu => {
-                log::warn!("No se pudo usar la GPU ({e}); paso al procesador");
-                on_fallback(e);
-                (factory(Placement::Cpu)?, Placement::Cpu)
-            }
-            Err(e) => return Err(e),
-        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let t = Transcriber::spawn(
+            first,
+            factory,
+            on_fallback,
+            Box::new(move |r| {
+                let _ = tx.send(r);
+            }),
+        );
+        match rx.recv() {
+            Ok(Ok(_)) => Ok(t),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err("la transcripción no arrancó".into()),
+        }
+    }
+
+    /// Vuelve enseguida: el trabajador carga el motor (con el paso de la GPU al procesador) y
+    /// después atiende la cola. Lo enviado mientras tanto espera; si la carga falla, se descarta.
+    pub fn spawn(
+        first: Placement,
+        factory: AsrFactory,
+        on_fallback: Box<dyn Fn(String) + Send>,
+        on_loaded: Box<dyn FnOnce(Result<Placement, String>) + Send>,
+    ) -> Transcriber {
         let shared = Arc::new(Shared::default());
-        let worker = shared.clone();
+        let placement = Arc::new(Mutex::new(first));
+        let (worker, place) = (shared.clone(), placement.clone());
         let thread = std::thread::Builder::new()
             .name("transcripcion".into())
-            .spawn(move || run(asr, &worker))
-            .map_err(|e| format!("no se pudo arrancar la transcripción: {e}"))?;
-        Ok(Transcriber {
+            .spawn(move || match load(first, &factory, &*on_fallback) {
+                Ok((asr, p)) => {
+                    *place.lock().unwrap() = p;
+                    worker.queue.lock().unwrap().loaded = true;
+                    worker.changed.notify_all();
+                    on_loaded(Ok(p));
+                    run(asr, &worker);
+                }
+                Err(e) => {
+                    let dropped = {
+                        let mut q = worker.queue.lock().unwrap();
+                        q.failed = true;
+                        std::mem::take(&mut q.jobs).len()
+                    };
+                    worker.changed.notify_all();
+                    log::error!("No se pudo cargar el modelo ({e}); se descartan {dropped} frases");
+                    on_loaded(Err(e));
+                }
+            })
+            .ok();
+        if thread.is_none() {
+            shared.queue.lock().unwrap().failed = true;
+        }
+        Transcriber {
             shared,
-            thread: Some(thread),
+            thread,
             placement,
-        })
+        }
     }
 
     pub fn placement(&self) -> Placement {
-        self.placement
+        *self.placement.lock().unwrap()
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.shared.queue.lock().unwrap().loaded
     }
 
     pub fn submit(&self, seg: Segment, on_result: OnResult) {
-        self.shared
-            .queue
-            .lock()
-            .unwrap()
-            .jobs
-            .push_back(Job { seg, on_result });
+        let mut q = self.shared.queue.lock().unwrap();
+        if q.failed {
+            log::warn!("Sin modelo: se descarta una frase de {}", seg.speaker);
+            return;
+        }
+        q.jobs.push_back(Job { seg, on_result });
+        drop(q);
         self.shared.changed.notify_all();
     }
 
@@ -185,8 +231,16 @@ impl Transcriber {
 
     fn shutdown(&mut self) {
         if let Some(thread) = self.thread.take() {
-            self.shared.queue.lock().unwrap().closing = true;
+            let loaded = {
+                let mut q = self.shared.queue.lock().unwrap();
+                q.closing = true;
+                q.loaded || q.failed
+            };
             self.shared.changed.notify_all();
+            if !loaded {
+                // Aún cargando (quizá descargando): no se espera; el hilo termina al acabar.
+                return;
+            }
             if thread.join().is_err() {
                 log::error!("El hilo de transcripción terminó con un pánico");
             }
@@ -197,6 +251,22 @@ impl Transcriber {
 impl Drop for Transcriber {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+fn load(
+    first: Placement,
+    factory: &AsrFactory,
+    on_fallback: &dyn Fn(String),
+) -> Result<(Box<dyn Asr>, Placement), String> {
+    match factory(first) {
+        Ok(asr) => Ok((asr, first)),
+        Err(e) if first != Placement::Cpu => {
+            log::warn!("No se pudo usar la GPU ({e}); paso al procesador");
+            on_fallback(e);
+            Ok((factory(Placement::Cpu)?, Placement::Cpu))
+        }
+        Err(e) => Err(e),
     }
 }
 
