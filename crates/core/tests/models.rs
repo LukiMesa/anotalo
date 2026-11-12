@@ -203,3 +203,18 @@ fn http_fetch_resumes_from_hugging_face() {
         .unwrap();
     assert_eq!(tail.len(), 1024);
 }
+
+#[test]
+fn cpu_threads_follow_physical_cores_up_to_8() {
+    // Spec §5.2: hilos = núcleos físicos (un portátil de 4 núcleos y 8 hilos usa 4), hasta 8.
+    let logical = std::thread::available_parallelism().unwrap().get();
+    let physical = anotalo_whisper::physical_cores().expect("núcleos físicos");
+    assert!(
+        physical >= 1 && physical <= logical,
+        "{physical} de {logical}"
+    );
+    assert_eq!(
+        anotalo_core::models::cpu_threads() as usize,
+        physical.min(8)
+    );
+}

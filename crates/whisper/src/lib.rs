@@ -225,6 +225,42 @@ impl Drop for Model {
     }
 }
 
+/// Núcleos físicos del procesador (sin contar los hilos de hyper-threading), o None si Windows no
+/// lo dice. El motor usa un hilo por núcleo físico (spec §5.2).
+pub fn physical_cores() -> Option<usize> {
+    unsafe extern "system" {
+        fn GetLogicalProcessorInformationEx(relation: u32, buffer: *mut u8, len: *mut u32) -> i32;
+    }
+    const RELATION_PROCESSOR_CORE: u32 = 0;
+    let mut len = 0u32;
+    // SAFETY: con búfer nulo solo devuelve el tamaño necesario.
+    unsafe {
+        GetLogicalProcessorInformationEx(RELATION_PROCESSOR_CORE, std::ptr::null_mut(), &mut len)
+    };
+    if len == 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; len as usize];
+    // SAFETY: búfer del tamaño que pidió Windows.
+    if unsafe {
+        GetLogicalProcessorInformationEx(RELATION_PROCESSOR_CORE, buf.as_mut_ptr(), &mut len)
+    } == 0
+    {
+        return None;
+    }
+    // Un registro por núcleo; cada uno empieza por (Relationship: u32, Size: u32).
+    let (mut cores, mut at) = (0, 0usize);
+    while at + 8 <= len as usize {
+        let size = u32::from_le_bytes(buf[at + 4..at + 8].try_into().unwrap()) as usize;
+        if size == 0 {
+            break;
+        }
+        cores += 1;
+        at += size;
+    }
+    (cores > 0).then_some(cores)
+}
+
 /// El motor usa el OpenMP de Microsoft (vcomp140.dll, firmada por Microsoft), que va junto al exe y
 /// es de carga diferida (.cargo/config.toml): sin ella, el primer cálculo cerraría el programa. Se
 /// carga aquí, antes de que ggml la necesite: la de la carpeta del exe y, si no está, la de
