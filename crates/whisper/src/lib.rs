@@ -2,10 +2,12 @@
 //!
 //! El puente en C (`shim/`) concentra la API de whisper.cpp; aquí solo hay una capa segura.
 
-use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, OsStr, c_char, c_int, c_void};
 use std::fmt;
+use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::NonNull;
+use std::sync::OnceLock;
 
 unsafe extern "C" {
     fn anotalo_init(model_path: *const c_char, use_gpu: c_int, gpu_device: c_int) -> *mut c_void;
@@ -70,6 +72,8 @@ pub enum WhisperError {
     Transcribe(i32),
     /// Al procesador le faltan instrucciones con las que está compilado el motor.
     UnsupportedCpu(Vec<&'static str>),
+    /// Falta una DLL que acompaña al exe (vcomp140.dll).
+    MissingRuntime(String),
 }
 
 impl fmt::Display for WhisperError {
@@ -83,6 +87,7 @@ impl fmt::Display for WhisperError {
                  ({}): hace falta uno con AVX2 (Intel desde 2013, AMD desde 2015)",
                 missing.join(", ")
             ),
+            WhisperError::MissingRuntime(why) => f.write_str(why),
         }
     }
 }
@@ -172,6 +177,7 @@ impl Model {
         if !missing.is_empty() {
             return Err(WhisperError::UnsupportedCpu(missing));
         }
+        openmp_runtime()?;
         let shown = path.display().to_string();
         let c_path = path
             .to_str()
@@ -217,6 +223,51 @@ impl Drop for Model {
         // SAFETY: contexto creado por anotalo_init y liberado una sola vez.
         unsafe { anotalo_free(self.ctx.as_ptr()) }
     }
+}
+
+/// El motor usa el OpenMP de Microsoft (vcomp140.dll, firmada por Microsoft), que va junto al exe y
+/// es de carga diferida (.cargo/config.toml): sin ella, el primer cálculo cerraría el programa. Se
+/// carga aquí, antes de que ggml la necesite: la de la carpeta del exe y, si no está, la de
+/// System32. Nunca la que Windows encontraría buscando por su cuenta.
+fn openmp_runtime() -> Result<(), WhisperError> {
+    static LOADED: OnceLock<Result<(), String>> = OnceLock::new();
+    LOADED
+        .get_or_init(load_openmp)
+        .clone()
+        .map_err(WhisperError::MissingRuntime)
+}
+
+fn load_openmp() -> Result<(), String> {
+    unsafe extern "system" {
+        fn LoadLibraryExW(name: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
+    }
+    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x800;
+    let wide = |s: &OsStr| s.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+    let next_to_exe = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("vcomp140.dll")))
+        .filter(|p| p.exists());
+    if let Some(local) = next_to_exe {
+        let name = wide(local.as_os_str());
+        // SAFETY: ruta completa terminada en NUL; el módulo queda cargado mientras viva el proceso.
+        if !unsafe { LoadLibraryExW(name.as_ptr(), std::ptr::null_mut(), 0) }.is_null() {
+            return Ok(());
+        }
+    }
+    let name = wide(OsStr::new("vcomp140.dll"));
+    // SAFETY: nombre terminado en NUL; solo se busca en System32.
+    if !unsafe {
+        LoadLibraryExW(
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        )
+    }
+    .is_null()
+    {
+        return Ok(());
+    }
+    Err("falta vcomp140.dll junto a Anotalo.exe; reinstala Anotalo".into())
 }
 
 #[cfg(test)]

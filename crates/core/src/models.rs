@@ -267,7 +267,8 @@ pub fn choose(
     Placement::Cpu
 }
 
-/// Hilos del procesador para whisper.cpp (lo decide el bench de la tarea 13).
+/// Hilos del procesador para whisper.cpp: todos los núcleos hasta 8. En el bench del M1 (i7-9700,
+/// 8 núcleos, small q8_0 con OpenMP), 8 hilos fue un 20 % más rápido que 4.
 pub fn cpu_threads() -> i32 {
     std::thread::available_parallelism()
         .map(|n| n.get().min(8))

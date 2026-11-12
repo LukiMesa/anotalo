@@ -1,0 +1,11 @@
+{
+  "_doc": "Marca de velocidad y precisión de la spec §1 (PC del dueño: RTX 3080 12 GB, i7-9700 8C/8T). 'today' es la app de Python (faster-whisper) medida el 2026-11-11 con los mismos 60 clips; 'max' es el límite: total y p50/p95 +10 % en GPU y +15 % en CPU, WER +0,3 puntos, carga en caliente +1 s.",
+  "gpu": {
+    "today": { "load_s": 5.3, "total_s": 14.9, "p50_s": 0.25, "p95_s": 0.30, "short_p50_s": 0.15, "wer_pct": 3.6 },
+    "max": { "total_s": 16.39, "p50_s": 0.275, "p95_s": 0.33, "wer_pct": 3.9, "warm_load_s": 6.3 }
+  },
+  "cpu": {
+    "today": { "load_s": 2.7, "total_s": 131.4, "p50_s": 2.19, "p95_s": 2.47, "short_p50_s": 1.70, "wer_pct": 7.7 },
+    "max": { "total_s": 151.1, "p50_s": 2.52, "p95_s": 2.84, "wer_pct": 8.0, "warm_load_s": 3.7 }
+  }
+}

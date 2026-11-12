@@ -1,13 +1,18 @@
 //! Compila whisper.cpp (submódulo third_party/whisper.cpp) desde el código fuente:
-//! estático, Vulkan + CPU, CRT estático, sin OpenMP, y con `vulkan-1.dll` de carga diferida
-//! protegida (sin Vulkan en el PC se usa la CPU en lugar de cerrarse). Spec §5.1–5.2.
+//! estático, Vulkan + CPU, CRT estático, y con `vulkan-1.dll` de carga diferida protegida (sin
+//! Vulkan en el PC se usa la CPU en lugar de cerrarse). Spec §5.1–5.2.
+//!
+//! OpenMP sí: sin él, la CPU transcribía un 20–50 % más lento que la app de Python (bench de la
+//! tarea 13 del M1). Su runtime, vcomp140.dll (de Microsoft y firmada por Microsoft), no se puede
+//! enlazar estático: va junto al exe (decisión del dueño, 2026-11-12), de carga diferida, y el exe
+//! la carga de su propia carpeta (src/lib.rs).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
 /// Cambia este valor si cambia el parche: obliga a copiar y parchear de nuevo.
-const PATCH_STAMP: &str = "anotalo-vulkan-guard-4";
+const PATCH_STAMP: &str = "anotalo-vulkan-guard-4 openmp-1";
 
 const SKIP_TOP: &[&str] = &[".git", "models", "samples", "examples"];
 
@@ -68,7 +73,7 @@ fn main() {
         .define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded")
         .define("BUILD_SHARED_LIBS", "OFF")
         .define("GGML_VULKAN", "ON")
-        .define("GGML_OPENMP", "OFF")
+        .define("GGML_OPENMP", "ON")
         .define("GGML_NATIVE", "OFF")
         .define("GGML_AVX", "ON")
         .define("GGML_AVX2", "ON")
@@ -80,7 +85,10 @@ fn main() {
         .define("WHISPER_BUILD_TESTS", "OFF")
         .build();
 
-    // 5. Enlace: todo estático salvo vulkan-1.dll (de carga diferida: .cargo/config.toml).
+    // 5. Enlace: todo estático salvo vulkan-1.dll y vcomp140.dll (ambas de carga diferida:
+    // .cargo/config.toml; /openmp añade vcomp.lib por su cuenta). vcomp140.dll se copia junto a
+    // los exe, los tests y los ejemplos.
+    copy_openmp_runtime(&profile_dir);
     println!(
         "cargo:rustc-link-search=native={}",
         wcpp.join("lib").display()
@@ -200,6 +208,64 @@ static bool anotalo_vulkan_loader_available() {
         1,
     );
     fs::write(file, code).unwrap();
+}
+
+/// Copia vcomp140.dll (el OpenMP de Microsoft, de las Build Tools de Visual Studio) junto a los
+/// exe (`target/<perfil>`), los tests (`deps`) y los ejemplos. El instalador la lleva junto a
+/// Anotalo.exe.
+fn copy_openmp_runtime(profile_dir: &Path) {
+    let dll = find_vcomp().unwrap_or_else(|| {
+        panic!(
+            "No se encontró vcomp140.dll en las Build Tools de Visual Studio \
+             (VC\\Redist\\MSVC\\<versión>\\x64\\Microsoft.VC14x.OpenMP)"
+        )
+    });
+    let bytes = fs::read(&dll).expect("no se pudo leer vcomp140.dll");
+    for dir in [
+        profile_dir.to_path_buf(),
+        profile_dir.join("deps"),
+        profile_dir.join("examples"),
+    ] {
+        fs::create_dir_all(&dir).unwrap();
+        let to = dir.join("vcomp140.dll");
+        // solo si cambió: un exe en marcha la tiene abierta y no se podría sobrescribir
+        if fs::read(&to).ok().as_deref() != Some(bytes.as_slice()) {
+            fs::copy(&dll, &to).unwrap_or_else(|e| {
+                panic!("no se pudo copiar vcomp140.dll a {}: {e}", to.display())
+            });
+        }
+    }
+    println!("cargo:rerun-if-changed={}", dll.display());
+}
+
+/// La vcomp140.dll de 64 bits más reciente de las Build Tools (ni la de depuración ni la "onecore").
+fn find_vcomp() -> Option<PathBuf> {
+    let vswhere =
+        Path::new(r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe");
+    let out = Command::new(vswhere)
+        .args([
+            "-latest",
+            "-products",
+            "*",
+            "-find",
+            r"VC\Redist\MSVC\**\vcomp140.dll",
+        ])
+        .output()
+        .ok()?;
+    let mut found: Vec<PathBuf> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            let l = l.to_lowercase();
+            l.contains(r"\x64\microsoft.vc")
+                && l.contains("openmp")
+                && !l.contains("onecore")
+                && !l.contains("debug")
+        })
+        .map(PathBuf::from)
+        .collect();
+    found.sort();
+    found.pop()
 }
 
 /// cmake-rs busca `cmake` en el PATH o en la variable CMAKE; con solo las Build Tools de

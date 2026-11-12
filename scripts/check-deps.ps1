@@ -1,5 +1,5 @@
 # Comprueba de qué DLL depende cada exe (spec §5.1): CRT estático (sin MSVCP/VCRUNTIME/VCOMP/UCRT),
-# vulkan-1.dll solo de carga diferida y, por lo demás, únicamente DLL de Windows, cargadas solo de
+# vulkan-1.dll y vcomp140.dll solo de carga diferida y, por lo demás, únicamente DLL de Windows, cargadas solo de
 # System32 (/DEPENDENTLOADFLAG:0x800: una DLL con el mismo nombre junto al exe no se carga).
 # Uso: .\scripts\check-deps.ps1 -Exe target\release\anotalo.exe[,target\release\examples\bench.exe]
 param([Parameter(Mandatory = $true)][string[]]$Exe)
@@ -14,7 +14,7 @@ if (-not $dumpbin) { throw "No se encontró dumpbin.exe (Build Tools de Visual S
 $allowed = @(
     "KERNEL32.dll", "USER32.dll", "GDI32.dll", "ADVAPI32.dll", "SHELL32.dll", "ole32.dll", "OLEAUT32.dll",
     "WS2_32.dll", "bcrypt.dll", "bcryptprimitives.dll", "ntdll.dll", "CRYPT32.dll", "Secur32.dll", "dbghelp.dll",
-    "combase.dll", "mmdevapi.dll", "propsys.dll"
+    "combase.dll", "mmdevapi.dll", "propsys.dll", "psapi.dll"
 )
 $crt = '^(MSVCP|VCRUNTIME|VCOMP|api-ms-win-crt-)'
 
@@ -40,8 +40,11 @@ foreach ($file in $Exe) {
         elseif ($dll -ieq "vulkan-1.dll") { $problems += "${file}: vulkan-1.dll debe ser de carga diferida, no una importación normal" }
         elseif ($dll -notlike "api-ms-win-core-*" -and -not ($allowed | Where-Object { $_ -ieq $dll })) { $problems += "${file}: $dll no está en la lista de DLL de Windows permitidas" }
     }
+    # vcomp140.dll (OpenMP de Microsoft, firmada por Microsoft) va junto al exe: solo de carga
+    # diferida, y anotalo-whisper la carga de la carpeta del exe (como importación normal, Windows
+    # la buscaría en System32 por /DEPENDENTLOADFLAG y no la encontraría en un PC sin el VC++ redist).
     foreach ($dll in $delay) {
-        if ($dll -ine "vulkan-1.dll") { $problems += "${file}: $dll no debería ser de carga diferida" }
+        if ($dll -ine "vulkan-1.dll" -and $dll -ine "vcomp140.dll") { $problems += "${file}: $dll no debería ser de carga diferida" }
     }
     if (-not ($delay | Where-Object { $_ -ieq "vulkan-1.dll" })) { $problems += "${file}: falta vulkan-1.dll entre las de carga diferida" }
     $flag = (& $dumpbin.FullName /nologo /loadconfig $file) | Where-Object { $_ -match '^\s*([0-9A-Fa-f]+) Dependent Load Flag' } | ForEach-Object { [Convert]::ToInt32($Matches[1], 16) }
