@@ -225,6 +225,29 @@ pub fn pick_capture(
     }
 }
 
+/// Plataforma reconocible en el título de una ventana del navegador (p. ej. "Meet"), o None.
+pub fn site_from_title(title: &str) -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static SITES: OnceLock<Vec<(&'static str, regex::Regex)>> = OnceLock::new();
+    let sites = SITES.get_or_init(|| {
+        [
+            ("Meet", r"^Meet\s*[-–—:]|Google Meet"),
+            ("Teams", r"Microsoft Teams"),
+            ("Zoom", r"\bZoom\b"),
+            ("WhatsApp", r"\bWhatsApp\b"),
+            ("Discord", r"\bDiscord\b"),
+            ("Slack", r"\bSlack\b"),
+        ]
+        .into_iter()
+        .map(|(name, rx)| (name, regex::Regex::new(rx).expect("regex válida")))
+        .collect()
+    });
+    sites
+        .iter()
+        .find(|(_, rx)| rx.is_match(title))
+        .map(|(name, _)| *name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

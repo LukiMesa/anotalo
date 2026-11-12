@@ -2,6 +2,7 @@
 //! transcripción a Markdown, modelos y la sesión de grabación.
 pub mod applog;
 pub mod config;
+pub mod detector;
 pub mod engine;
 pub mod filter;
 pub mod models;
