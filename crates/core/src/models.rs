@@ -171,7 +171,7 @@ pub fn ensure_download(
     let mut result = download(m, &part, url, fetch, progress);
     if matches!(&result, Err(DownloadError::CannotResume)) {
         let _ = fs::remove_file(&part);
-        result = download(m, &part, &url, fetch, progress);
+        result = download(m, &part, url, fetch, progress);
     }
     match result {
         Ok(()) => {}
