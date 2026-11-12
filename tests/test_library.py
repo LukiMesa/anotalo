@@ -176,3 +176,24 @@ def test_reads_anotalo_named_speakers():
     rec = parse_recording(fixture)
     assert [l.speaker for l in rec.lines] == ["María", "Yo", "Persona 1", "María"]
     assert rec.duration_s == 60
+
+
+def test_python_reads_rust_client_header():
+    """Un archivo de Anotalo con título, cliente, marcas y personas se sigue leyendo en la app de Python."""
+    from pathlib import Path
+
+    fixture = (
+        Path(__file__).resolve().parents[1] / "crates" / "core" / "tests" / "fixtures" / "library" / "2026-11-12_1000_Teams.md"
+    )
+    rec = parse_recording(fixture)
+    assert rec.kind == "call" and rec.app == "Teams"
+    assert rec.started_at == datetime(2026, 11, 12, 10, 0, 0)
+    assert rec.duration_s == 60
+    assert [l.speaker for l in rec.lines] == ["María", "Yo", "Persona 1", "María"]
+    assert rec.lines[0].text == "Hola, soy María."
+    assert [r.id for r in list_recordings(fixture.parent)][:4] == [
+        "2026-11-12_1000_Teams.md",
+        "2026-11-11_0905_Meet.md",
+        "2026-11-10_1120_Nota.md",
+        "2026-10-23_1504_Teams.md",
+    ]
