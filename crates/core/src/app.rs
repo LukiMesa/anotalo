@@ -95,15 +95,19 @@ pub type SessionFactory =
     Box<dyn Fn(SessionRequest, EventSink) -> Result<Box<dyn Recording>, String> + Send + Sync>;
 pub type Applier = Box<dyn Fn(&Value) -> Result<(), String> + Send + Sync>;
 pub type AfterApply = Box<dyn Fn(&Value) + Send + Sync>;
+pub type DetectorFactory =
+    Box<dyn FnOnce(OnDetected, OnDetected) -> Arc<dyn DetectorControl> + Send>;
+pub type CopyText = Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+pub type SaveSettings = Box<dyn Fn(&Settings) -> Result<(), String> + Send + Sync>;
 
 pub struct AppDeps {
-    pub detector: Box<dyn FnOnce(OnDetected, OnDetected) -> Arc<dyn DetectorControl> + Send>,
+    pub detector: DetectorFactory,
     pub sessions: SessionFactory,
     pub notifier: Arc<dyn Notifier>,
     pub model: Arc<dyn ModelGate>,
-    pub copy_text: Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>,
+    pub copy_text: CopyText,
     pub events: EventSink,
-    pub save: Box<dyn Fn(&Settings) -> Result<(), String> + Send + Sync>,
+    pub save: SaveSettings,
 }
 
 /// Ajustes que no se cambian mientras se graba.
@@ -137,9 +141,9 @@ pub struct App {
     sessions: SessionFactory,
     notifier: Arc<dyn Notifier>,
     model: Arc<dyn ModelGate>,
-    copy_text: Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>,
+    copy_text: CopyText,
     events: EventSink,
-    save: Box<dyn Fn(&Settings) -> Result<(), String> + Send + Sync>,
+    save: SaveSettings,
     appliers: Mutex<HashMap<String, Applier>>,
     after_apply: Mutex<HashMap<String, AfterApply>>,
 }
