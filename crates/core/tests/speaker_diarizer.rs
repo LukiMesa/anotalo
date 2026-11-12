@@ -84,6 +84,29 @@ fn test_finish_uses_stored_names() {
     assert_eq!(single.finish().labels[&0], "Otros");
 }
 
+/// Una voz guardada que se llama como una etiqueta de la app (voces.json editado a mano): la
+/// persona sin nombre no puede salir con esa misma etiqueta, o el archivo uniría a dos personas.
+#[test]
+fn test_stored_name_like_a_person_label_is_not_repeated() {
+    let stored = StoredVoice {
+        name: "Persona 1".into(),
+        print: basis(1),
+        seconds: 60.0,
+    };
+    let mut d = Diarizer::new(vec![stored], "Otros");
+    for (i, k) in [0, 1, 0, 1, 0, 1].iter().enumerate() {
+        let t = i as f64 * 5.0;
+        d.add(t, t + 4.0, Some(voice(*k, i)));
+    }
+    let f = d.finish();
+    assert_eq!(
+        (f.labels[&0].as_str(), f.labels[&1].as_str()),
+        ("Persona 2", "Persona 1")
+    );
+    let names: Vec<&str> = f.voices.iter().map(|v| v.label.as_str()).collect();
+    assert_eq!(names, ["Persona 2", "Persona 1"]);
+}
+
 #[test]
 fn test_segments_without_embedding_follow_the_previous_voice() {
     let mut d = Diarizer::new(vec![], "Otros");

@@ -22,6 +22,21 @@ pub fn fmt_elapsed(seconds: f64) -> String {
     format!("{:02}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60)
 }
 
+/// Lo que se añadió de una vez a una línea, con su segmento de voz de "Otros" si lo tiene. Una
+/// línea unida en vivo guarda sus trozos: si al final son dos personas, se parte al cerrar.
+#[derive(Clone)]
+struct Part {
+    voice: Option<u32>,
+    start_s: f64,
+    end_s: f64,
+    text: String,
+}
+
+/// Los segmentos de voz de "Otros" de unos trozos.
+fn voice_ids(parts: &[Part]) -> impl Iterator<Item = u32> + '_ {
+    parts.iter().filter_map(|p| p.voice)
+}
+
 struct Pending {
     speaker: String,
     start_s: f64,
@@ -30,8 +45,8 @@ struct Pending {
     arrived: f64,
     /// Una marca (`**[HH:MM:SS] Marca**`), no una frase.
     mark: bool,
-    /// Los segmentos de voz de "Otros" que forman la línea (para la etiqueta final).
-    voices: Vec<u32>,
+    /// Los trozos que forman la línea (para la etiqueta final); ninguno en una marca.
+    parts: Vec<Part>,
 }
 
 impl Pending {
@@ -57,7 +72,7 @@ struct Row {
     start_s: f64,
     end_s: f64,
     mark: bool,
-    voices: Vec<u32>,
+    parts: Vec<Part>,
 }
 
 impl Row {
@@ -68,6 +83,11 @@ impl Row {
             self.speaker,
             self.text
         );
+    }
+
+    /// Tiene algún segmento de voz de "Otros".
+    fn voiced(&self) -> bool {
+        voice_ids(&self.parts).next().is_some()
     }
 }
 
@@ -96,43 +116,92 @@ fn in_final_order(rows: &[Row]) -> Vec<&str> {
         .collect()
 }
 
-/// Las líneas con las etiquetas finales de las voces (spec §2.4.5). Cada línea con voces toma la
-/// etiqueta de la primera; si así no cambia ninguna, el archivo queda exactamente igual. Si cambia
-/// alguna, las líneas seguidas de la misma persona (sin nada entre ellas y a menos de
-/// `MERGE_GAP_S`) se unen, como en vivo.
+/// La etiqueta final de cada trozo de una línea: la de su voz o, si no tiene, la del trozo anterior
+/// (al principio, la del primero con voz). None si es una marca, si ningún trozo tiene etiqueta o
+/// si no cambia ninguno.
+fn final_labels<'a>(r: &Row, labels: &'a HashMap<u32, String>) -> Option<Vec<&'a str>> {
+    if r.mark {
+        return None;
+    }
+    let own: Vec<Option<&str>> = r
+        .parts
+        .iter()
+        .map(|p| p.voice.and_then(|v| labels.get(&v)).map(String::as_str))
+        .collect();
+    let mut current = own.iter().flatten().next().copied()?;
+    let all: Vec<&str> = own
+        .into_iter()
+        .map(|l| {
+            current = l.unwrap_or(current);
+            current
+        })
+        .collect();
+    all.iter().any(|l| *l != r.speaker).then_some(all)
+}
+
+/// La línea partida en tramos seguidos de la misma persona, cada uno con su etiqueta, su texto y
+/// su hora de inicio. Si toda es de una persona, sale una sola línea con el mismo texto.
+fn split(r: &Row, labels: &[&str]) -> Vec<Row> {
+    let mut out: Vec<Row> = Vec::new();
+    for (part, &label) in r.parts.iter().zip(labels) {
+        match out.last_mut() {
+            Some(last) if last.speaker == label => {
+                last.text = format!("{} {}", last.text, part.text);
+                last.end_s = last.end_s.max(part.end_s);
+                last.parts.push(part.clone());
+            }
+            _ => out.push(Row {
+                line: String::new(),
+                speaker: label.to_string(),
+                text: part.text.clone(),
+                start_s: part.start_s,
+                end_s: part.end_s,
+                mark: false,
+                parts: vec![part.clone()],
+            }),
+        }
+    }
+    for row in &mut out {
+        row.render();
+    }
+    out
+}
+
+/// Las líneas con las etiquetas finales de las voces (spec §2.4.5). Cada trozo de una línea toma la
+/// etiqueta de su voz; si así no cambia ninguna, el archivo queda exactamente igual. Si cambia
+/// alguna, una línea unida en vivo que resulta ser de varias personas se parte (una línea por
+/// tramo seguido de la misma persona) y las líneas seguidas de la misma persona (sin nada entre
+/// ellas y a menos de `MERGE_GAP_S`) se unen, como en vivo.
 fn relabeled(rows: &[Row], labels: &HashMap<u32, String>) -> Option<Vec<String>> {
-    let new_speaker = |r: &Row| -> Option<String> {
-        let first = r.voices.first()?;
-        let l = labels.get(first)?;
-        (!r.mark && *l != r.speaker).then(|| l.clone())
-    };
-    if !rows.iter().any(|r| new_speaker(r).is_some()) {
+    let finals: Vec<Option<Vec<&str>>> = rows.iter().map(|r| final_labels(r, labels)).collect();
+    if finals.iter().all(Option::is_none) {
         return None;
     }
     let mut out: Vec<Row> = Vec::with_capacity(rows.len());
     for i in final_order(rows) {
-        let mut r = rows[i].clone();
-        if let Some(s) = new_speaker(&r) {
-            r.speaker = s;
-            r.render();
-        }
-        let joins = out.last().is_some_and(|p| {
-            !r.mark
-                && !p.mark
-                && !r.voices.is_empty()
-                && !p.voices.is_empty()
-                && p.speaker == r.speaker
-                && r.start_s >= p.start_s
-                && r.start_s - p.end_s < MERGE_GAP_S
-        });
-        if joins {
-            let p = out.last_mut().expect("hay una anterior");
-            p.text = format!("{} {}", p.text, r.text);
-            p.end_s = p.end_s.max(r.end_s);
-            p.voices.extend(r.voices);
-            p.render();
-        } else {
-            out.push(r);
+        let pieces = match &finals[i] {
+            Some(l) => split(&rows[i], l),
+            None => vec![rows[i].clone()],
+        };
+        for r in pieces {
+            let joins = out.last().is_some_and(|p| {
+                !r.mark
+                    && !p.mark
+                    && r.voiced()
+                    && p.voiced()
+                    && p.speaker == r.speaker
+                    && r.start_s >= p.start_s
+                    && r.start_s - p.end_s < MERGE_GAP_S
+            });
+            if joins {
+                let p = out.last_mut().expect("hay una anterior");
+                p.text = format!("{} {}", p.text, r.text);
+                p.end_s = p.end_s.max(r.end_s);
+                p.parts.extend(r.parts);
+                p.render();
+            } else {
+                out.push(r);
+            }
         }
     }
     Some(out.into_iter().map(|r| r.line).collect())
@@ -249,6 +318,12 @@ impl TranscriptWriter {
             return None;
         }
         let end_s = end_s.unwrap_or(start_s);
+        let part = Part {
+            voice,
+            start_s,
+            end_s,
+            text: text.clone(),
+        };
         let mut st = self.state.lock().unwrap();
         if st.closed {
             return None;
@@ -272,7 +347,7 @@ impl TranscriptWriter {
                 let l = &mut st.pending[j];
                 l.text = format!("{} {}", l.text, text);
                 l.end_s = l.end_s.max(end_s);
-                l.voices.extend(voice);
+                l.parts.push(part);
                 // "arrived" se queda en la primera llegada: así una racha larga llega a disco a tiempo.
             }
             None => {
@@ -284,7 +359,7 @@ impl TranscriptWriter {
                     text: text.clone(),
                     arrived,
                     mark: false,
-                    voices: voice.into_iter().collect(),
+                    parts: vec![part],
                 });
             }
         }
@@ -306,7 +381,7 @@ impl TranscriptWriter {
             text: String::new(),
             arrived,
             mark: true,
-            voices: Vec::new(),
+            parts: Vec::new(),
         };
         let line = mark.render();
         st.pending.push(mark);
@@ -338,8 +413,8 @@ impl TranscriptWriter {
         let st = self.state.lock().unwrap();
         st.written
             .iter()
-            .flat_map(|r| r.voices.iter().copied())
-            .chain(st.pending.iter().flat_map(|p| p.voices.iter().copied()))
+            .flat_map(|r| voice_ids(&r.parts))
+            .chain(st.pending.iter().flat_map(|p| voice_ids(&p.parts)))
             .collect()
     }
 
@@ -416,7 +491,7 @@ fn emit(st: &mut State, items: &[Pending]) -> io::Result<()> {
             start_s: p.start_s,
             end_s: p.end_s,
             mark: p.mark,
-            voices: p.voices.clone(),
+            parts: p.parts.clone(),
         }));
     st.written_texts
         .extend(items.iter().filter(|p| !p.mark).map(|p| p.text.clone()));

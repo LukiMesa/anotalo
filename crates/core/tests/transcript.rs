@@ -401,6 +401,41 @@ fn test_relabel_merges_rows_that_become_the_same_person() {
     assert_eq!(t.matches("Otros:**").count(), 1);
 }
 
+/// Dos segmentos unidos en vivo (la misma etiqueta y poca pausa) que al final son dos personas:
+/// cada una se queda con su texto, en su propia línea y con su hora.
+#[test]
+fn test_relabel_splits_a_live_merged_row_of_two_people() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = make(&d, "Teams");
+    w.add_voiced("Otros", 1.0, "Hola", Some(2.0), Some(0));
+    w.add_voiced("Otros", 2.5, "soy Juan", Some(3.5), Some(1)); // se une en vivo
+    assert_eq!(w.plain_texts(), vec!["Hola soy Juan"]);
+    w.relabel(labels(&[(0, "María"), (1, "Persona 1")]));
+    let t = read(&w.close(end()).unwrap());
+    assert!(
+        t.contains("\n**[00:00:01] María:** Hola\n\n**[00:00:02] Persona 1:** soy Juan\n\n"),
+        "{t}"
+    );
+}
+
+/// Los trozos que salen de partir una línea se unen después con la línea vecina de la misma persona.
+#[test]
+fn test_split_parts_merge_with_their_neighbours() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, clock) = make(&d, "Teams");
+    w.add_voiced("Otros", 1.0, "Uno.", Some(2.0), Some(0));
+    clock.set(10.0);
+    w.flush_due(); // ya escrita: la siguiente no se une en vivo
+    w.add_voiced("Otros", 2.5, "Dos.", Some(3.0), Some(1));
+    w.add_voiced("Otros", 4.0, "Tres.", Some(5.0), Some(2)); // se une a "Dos." en vivo
+    w.relabel(labels(&[(0, "María"), (1, "María"), (2, "Juan")]));
+    let t = read(&w.close(end()).unwrap());
+    assert!(
+        t.contains("\n**[00:00:01] María:** Uno. Dos.\n\n**[00:00:04] Juan:** Tres.\n\n"),
+        "{t}"
+    );
+}
+
 #[test]
 fn test_relabel_without_changes_is_byte_identical() {
     let run = |relabel: bool| {

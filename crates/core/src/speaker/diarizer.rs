@@ -119,16 +119,22 @@ impl Diarizer {
             .map(|m| m.iter().map(|&j| (embs[j].clone(), durs[j])).collect())
             .collect();
         let names = name_clusters(&for_vote, &self.memory);
+        // Cada persona con su etiqueta: un "Persona N" que ya es el nombre de una voz guardada
+        // (voces.json editado a mano) se salta, o el archivo uniría a dos personas.
+        let taken: HashSet<&str> = names.iter().flatten().map(String::as_str).collect();
         let mut unnamed = 0;
         let cluster_labels: Vec<String> = names
             .iter()
             .map(|n| match n {
                 Some(name) => name.clone(),
                 None if k == 1 => self.label_others.clone(),
-                None => {
+                None => loop {
                     unnamed += 1;
-                    person(unnamed)
-                }
+                    let label = person(unnamed);
+                    if !taken.contains(label.as_str()) {
+                        break label;
+                    }
+                },
             })
             .collect();
 
