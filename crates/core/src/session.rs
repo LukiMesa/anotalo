@@ -192,11 +192,23 @@ fn lane_worker(
     on_result: OnResult,
     diar: Option<Diar>,
 ) {
-    let submit = |segs: Vec<Segment>| {
+    // Si el modelo de voces revienta, la frase sigue sin huella (si no, el carril moriría y lo que
+    // dicen los demás dejaría de llegar al archivo). Se avisa solo la primera vez.
+    let mut embed_failed = false;
+    let mut submit = |segs: Vec<Segment>| {
         for mut seg in segs {
             // "Otros": la huella (fuera del cerrojo) y la etiqueta de su voz en este momento
             let voice = diar.as_ref().map(|(embed, diarizer)| {
-                let emb = embed.embed(&seg.audio);
+                let emb = catch_unwind(AssertUnwindSafe(|| embed.embed(&seg.audio)))
+                    .unwrap_or_else(|_| {
+                        if !embed_failed {
+                            embed_failed = true;
+                            log::error!(
+                                "El modelo de voces falló; las frases de \"Otros\" en las que falle quedan sin separar"
+                            );
+                        }
+                        None
+                    });
                 let (id, label) = diarizer.lock().unwrap_or_else(|e| e.into_inner()).add(
                     seg.start_s,
                     seg.end_s,

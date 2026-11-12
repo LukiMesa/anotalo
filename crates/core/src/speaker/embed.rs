@@ -89,8 +89,8 @@ impl Embed for Embedder {
         if audio.len() < MIN_SAMPLES {
             return None;
         }
-        match self.embed_raw(audio) {
-            Ok(raw) => Some(center(&raw)),
+        match self.embed_raw(audio).and_then(|raw| center_checked(&raw)) {
+            Ok(v) => Some(v),
             Err(e) => {
                 log::debug!("Sin huella de voz para un segmento: {e}");
                 None
@@ -121,6 +121,17 @@ pub fn l2n(v: &[f32]) -> Vec<f32> {
 pub fn center(raw: &[f32]) -> Vec<f32> {
     let d: Vec<f32> = l2n(raw).iter().zip(mu()).map(|(a, m)| a - m).collect();
     l2n(&d)
+}
+
+/// Como `center`, pero rechaza la huella si algún valor no es finito: un NaN se guardaría como
+/// `null` y dejaría ilegible el archivo de voces de la llamada.
+pub fn center_checked(raw: &[f32]) -> Result<Vec<f32>, String> {
+    let v = center(raw);
+    if v.iter().all(|x| x.is_finite()) {
+        Ok(v)
+    } else {
+        Err("la huella tiene valores no finitos".into())
+    }
 }
 
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {

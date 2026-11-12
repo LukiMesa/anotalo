@@ -1,9 +1,12 @@
 //! Catálogo de modelos, descarga verificada y reanudable, y elección del dispositivo (spec §5.2).
 use std::cell::RefCell;
-use std::io::{self, Cursor, Read};
+use std::io::{self, Cursor, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use anotalo_core::models::{
-    CATALOG, Fetch, ModelFile, Placement, TITANET, TITANET_URL, choose, ensure_download,
+    CATALOG, Fetch, HttpFetch, ModelFile, Placement, TITANET, TITANET_URL, choose, ensure_download,
     ensure_model, model_for,
 };
 use anotalo_whisper::{Device, DeviceKind};
@@ -195,7 +198,6 @@ fn legacy_cuda_setting_is_auto() {
 #[test]
 #[ignore]
 fn http_fetch_resumes_from_hugging_face() {
-    use anotalo_core::models::HttpFetch;
     let small = model_for("small", false);
     let url = format!(
         "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}",
@@ -208,6 +210,79 @@ fn http_fetch_resumes_from_hugging_face() {
         .read_to_end(&mut tail)
         .unwrap();
     assert_eq!(tail.len(), 1024);
+}
+
+/// Un servidor en 127.0.0.1 que atiende una conexión: lee la petición y hace `reply` con el socket.
+/// Devuelve la URL.
+fn local_server(reply: impl FnOnce(&mut TcpStream) + Send + 'static) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/modelo.bin", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut req = Vec::new();
+        let mut b = [0u8; 1];
+        while !req.ends_with(b"\r\n\r\n") && matches!(s.read(&mut b), Ok(1)) {
+            req.push(b[0]);
+        }
+        reply(&mut s);
+    });
+    url
+}
+
+/// Hasta que el cliente cuelgue (o se acabe el test): un servidor que no manda nada más.
+fn hold(s: &mut TcpStream) {
+    let _ = s.read(&mut [0u8; 1]);
+}
+
+/// Todo el cuerpo con conexión en 5 s y 1 s como mucho sin recibir nada. Corre en otro hilo: si se
+/// queda colgado, el test falla a los 15 s en vez de no acabar nunca.
+fn fetch_body(url: String) -> io::Result<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let r = HttpFetch::with_timeouts(Duration::from_secs(5), Duration::from_secs(1))
+            .open(&url, 0)
+            .and_then(|mut body| {
+                let mut got = Vec::new();
+                body.read_to_end(&mut got).map(|_| got)
+            });
+        let _ = tx.send(r);
+    });
+    rx.recv_timeout(Duration::from_secs(15))
+        .expect("la descarga se quedó colgada")
+}
+
+#[test]
+fn http_fetch_gives_up_when_the_server_never_answers() {
+    let url = local_server(hold);
+    let t = Instant::now();
+    assert!(fetch_body(url).is_err());
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+}
+
+#[test]
+fn http_fetch_gives_up_when_the_body_stalls() {
+    let url = local_server(|s| {
+        s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nhola")
+            .unwrap();
+        hold(s);
+    });
+    let t = Instant::now();
+    assert!(fetch_body(url).is_err());
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+}
+
+/// La espera es sin recibir nada, no un límite a toda la descarga (los modelos tardan minutos).
+#[test]
+fn http_fetch_keeps_a_slow_but_steady_body() {
+    let url = local_server(|s| {
+        s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\n")
+            .unwrap();
+        for _ in 0..12 {
+            std::thread::sleep(Duration::from_millis(250));
+            s.write_all(b"x").unwrap();
+        }
+    });
+    assert_eq!(fetch_body(url).unwrap(), b"xxxxxxxxxxxx");
 }
 
 #[test]

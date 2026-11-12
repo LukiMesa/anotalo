@@ -65,3 +65,30 @@ fn test_unloadable_model_is_deleted_and_downloaded_again() {
     assert!(m.wait_idle(Duration::from_secs(30)));
     assert_eq!(f.calls(), 1, "y la siguiente vez se descarga");
 }
+
+/// Revienta al abrir la descarga (como podría hacerlo tract al cargar).
+struct PanicFetch {
+    calls: AtomicUsize,
+}
+
+impl Fetch for PanicFetch {
+    fn open(&self, _url: &str, _from_byte: u64) -> io::Result<Box<dyn Read>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        panic!("la descarga revienta");
+    }
+}
+
+#[test]
+fn test_panicking_load_does_not_stay_loading() {
+    let d = tempfile::tempdir().unwrap();
+    let f = Arc::new(PanicFetch {
+        calls: AtomicUsize::new(0),
+    });
+    let m = SpeakerModel::new(d.path().to_path_buf(), f.clone());
+    m.ensure();
+    assert!(m.wait_idle(Duration::from_secs(10)), "sigue cargando");
+    assert!(m.get().is_none());
+    m.ensure();
+    assert!(m.wait_idle(Duration::from_secs(10)), "sigue cargando");
+    assert_eq!(f.calls.load(Ordering::SeqCst), 2);
+}

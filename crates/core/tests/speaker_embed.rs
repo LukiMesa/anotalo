@@ -2,7 +2,7 @@
 //! modelo: `scripts/get-test-model.ps1` (o la variable ANOTALO_TITANET).
 use std::path::PathBuf;
 
-use anotalo_core::speaker::embed::{DIM, Embed, Embedder, center, cosine, l2n};
+use anotalo_core::speaker::embed::{DIM, Embed, Embedder, center, center_checked, cosine, l2n};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -88,6 +88,17 @@ fn test_center_uses_the_shipped_mean() {
         cosine(&c, &l2n(&raw)) < 0.999,
         "el centrado cambia el vector"
     );
+}
+
+/// Un NaN se guardaría como `null` y dejaría ilegible el archivo de voces de la llamada.
+#[test]
+fn test_non_finite_print_is_rejected() {
+    let mut raw = fixture("jfk_full.emb.bin");
+    assert_eq!(center_checked(&raw).unwrap(), center(&raw));
+    raw[7] = f32::NAN;
+    assert!(center_checked(&raw).is_err(), "NaN");
+    raw[7] = f32::INFINITY;
+    assert!(center_checked(&raw).is_err(), "infinito");
 }
 
 #[test]

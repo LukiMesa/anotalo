@@ -13,6 +13,8 @@ mod shell;
 mod tray_app;
 mod voices_cli;
 
+use record::RecordArgs;
+
 /// El mensaje de una orden por la consola: 0 si salió bien, 1 si no.
 fn report(r: Result<String, String>) -> ExitCode {
     match r {
@@ -26,7 +28,6 @@ fn report(r: Result<String, String>) -> ExitCode {
         }
     }
 }
-use record::RecordArgs;
 
 const USAGE: &str = "Uso:
   anotalo [--minimized]            (la app, en la bandeja del sistema)

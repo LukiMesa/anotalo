@@ -385,6 +385,15 @@ impl Embed for NoEmbed {
     }
 }
 
+/// Un modelo de voces que revienta en cada segmento.
+struct PanicEmbed;
+
+impl Embed for PanicEmbed {
+    fn embed(&self, _audio: &[f32]) -> Option<Vec<f32>> {
+        panic!("el modelo de voces revienta");
+    }
+}
+
 fn speakers(dir: &Path, memory: Vec<StoredVoice>) -> Speakers {
     Speakers {
         embed: Arc::new(FakeEmbed),
@@ -479,4 +488,25 @@ fn test_embed_failure_keeps_others() {
     let path = sess.stop().unwrap();
     assert!(read(&path).contains("Otros:**"));
     assert!(!call_prints_path(&d.path().join("llamadas"), &path).exists());
+}
+
+/// Si el modelo de voces revienta, el carril de "Otros" sigue: sus frases (también las que vienen
+/// después del primer fallo) llegan al archivo, sin separar.
+#[test]
+fn test_embed_panic_keeps_the_others_lane() {
+    let d = tempfile::tempdir().unwrap();
+    let mut sp = speakers(d.path(), vec![]);
+    sp.embed = Arc::new(PanicEmbed);
+    let sess = start_with(
+        d.path(),
+        FakeSource::new(&[]),
+        FakeSource::voices(&[(1.5, 220.0), (5.5, 440.0)]),
+        Some(sp),
+    );
+    let t = read(&sess.stop().unwrap());
+    assert!(
+        t.contains("**[00:00:01] Otros:**") && t.contains("**[00:00:05] Otros:**"),
+        "{t}"
+    );
+    assert!(t.contains("- Duración:"), "{t}");
 }

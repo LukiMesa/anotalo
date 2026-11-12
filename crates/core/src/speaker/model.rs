@@ -2,6 +2,7 @@
 //! queda cargado. Si no está listo, las llamadas se graban sin separar; si falla, se reintenta en
 //! la siguiente llamada.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -56,12 +57,17 @@ impl SpeakerModel {
     }
 
     fn load(&self) {
-        let result = ensure_titanet(&self.dir, self.fetch.as_ref(), &mut |_| {}).and_then(|path| {
-            // un archivo del tamaño correcto que no carga está dañado: se borra para descargarlo
-            Embedder::load(&path).inspect_err(|_| {
-                let _ = std::fs::remove_file(&path);
+        // Un pánico (en la descarga o en tract) es un fallo más: vuelve a Idle y la siguiente
+        // llamada lo reintenta, en vez de quedarse "cargando" hasta reiniciar la app.
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            ensure_titanet(&self.dir, self.fetch.as_ref(), &mut |_| {}).and_then(|path| {
+                // un archivo del tamaño correcto que no carga está dañado: se borra para descargarlo
+                Embedder::load(&path).inspect_err(|_| {
+                    let _ = std::fs::remove_file(&path);
+                })
             })
-        });
+        }))
+        .unwrap_or_else(|_| Err("la carga se interrumpió por un error interno".into()));
         let next = match result {
             Ok(e) => {
                 log::info!("Modelo de voces listo");

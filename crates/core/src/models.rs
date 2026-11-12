@@ -4,6 +4,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anotalo_whisper::{Device, DeviceKind};
 use sha2::{Digest, Sha256};
@@ -82,13 +83,22 @@ pub trait Fetch {
     fn open(&self, url: &str, from_byte: u64) -> io::Result<Box<dyn Read>>;
 }
 
+/// Espera máxima para conectar con el servidor (TLS incluido).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Espera máxima sin recibir nada: una conexión atascada da error y la descarga se retoma desde el
+/// `.part` la próxima vez.
+const STALL_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Descarga por HTTPS con el TLS de Windows y sus certificados raíz.
 pub struct HttpFetch {
     agent: ureq::Agent,
 }
 
-impl Default for HttpFetch {
-    fn default() -> Self {
+impl HttpFetch {
+    /// Con estas esperas: `connect` para conectar y `stall` sin recibir nada (o sin poder enviar).
+    /// `stall` vale para cada lectura de la red, no para la descarga entera: un modelo de 1,6 GB
+    /// puede tardar lo que haga falta mientras sigan llegando datos.
+    pub fn with_timeouts(connect: Duration, stall: Duration) -> HttpFetch {
         let tls = ureq::tls::TlsConfig::builder()
             .provider(ureq::tls::TlsProvider::NativeTls)
             .root_certs(ureq::tls::RootCerts::PlatformVerifier)
@@ -96,9 +106,18 @@ impl Default for HttpFetch {
         let agent = ureq::Agent::config_builder()
             .tls_config(tls)
             .user_agent(concat!("Anotalo/", env!("CARGO_PKG_VERSION")))
+            .timeout_connect(Some(connect))
+            .timeout_per_read(Some(stall))
+            .timeout_per_write(Some(stall))
             .build()
             .into();
         HttpFetch { agent }
+    }
+}
+
+impl Default for HttpFetch {
+    fn default() -> Self {
+        HttpFetch::with_timeouts(CONNECT_TIMEOUT, STALL_TIMEOUT)
     }
 }
 
