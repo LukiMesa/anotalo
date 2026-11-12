@@ -9,6 +9,8 @@ use anotalo_core::routing::PLATFORMS;
 use anotalo_whisper::{DeviceKind, LoadOptions, Model, Params, devices};
 
 mod record;
+#[allow(dead_code)] // temporal: la app de la bandeja (tarea 12 del M2a) lo conecta
+mod shell;
 use record::RecordArgs;
 
 const USAGE: &str = "Uso:
