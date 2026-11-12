@@ -15,6 +15,8 @@ on:
       - ".cargo/**"
       - "scripts/check-deps.ps1"
       - "scripts/get-test-model.ps1"
+      - "scripts/fixtures/**"
+      - "bench/**"
       - ".github/workflows/anotalo.yml"
   pull_request:
     paths:
@@ -26,6 +28,8 @@ on:
       - ".cargo/**"
       - "scripts/check-deps.ps1"
       - "scripts/get-test-model.ps1"
+      - "scripts/fixtures/**"
+      - "bench/**"
       - ".github/workflows/anotalo.yml"
   workflow_dispatch:
 
@@ -94,12 +98,14 @@ jobs:
       - name: Tests
         run: cargo test --release --workspace
 
-      - name: Compilar
-        run: cargo build --release
+      - name: Compilar (exe y bench)
+        run: |
+          cargo build --release
+          cargo build --release -p anotalo --example bench
 
-      - name: Dependencias del exe (CRT estático, Vulkan diferido)
+      - name: Dependencias de los exe (CRT estático, Vulkan diferido, DLL solo de System32)
         shell: pwsh
-        run: .\scripts\check-deps.ps1 -Exe target\release\anotalo.exe
+        run: .\scripts\check-deps.ps1 -Exe target\release\anotalo.exe,target\release\examples\bench.exe
 
       - name: Autodiagnóstico (sin GPU en el runner)
         shell: pwsh
@@ -115,7 +121,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: anotalo-exe
-          path: target\release\anotalo.exe
+          path: |
+            target\release\anotalo.exe
+            target\release\vcomp140.dll
           retention-days: 14
           if-no-files-found: error
 
@@ -135,18 +143,21 @@ jobs:
           Invoke-WebRequest -UseBasicParsing -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -OutFile dist\ggml-tiny.bin
           Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/samples/jfk.wav" -OutFile dist\jfk.wav
 
-      - name: Arranca y transcribe sin Vulkan
+      - name: Arranca y transcribe sin Vulkan ni el OpenMP del sistema
         shell: pwsh
         run: |
-          # El runner trae vulkan-1.dll: se quita de verdad (la máquina es desechable) para probar
-          # el camino real de un PC sin driver de GPU.
-          $dll = "C:\Windows\System32\vulkan-1.dll"
-          if (Test-Path $dll) {
-            takeown /f $dll | Out-Null
-            icacls $dll /grant "*S-1-5-32-544:F" | Out-Null
-            Remove-Item -Force $dll
+          # El runner trae vulkan-1.dll y vcomp140.dll (Visual Studio): se quitan de verdad (la
+          # máquina es desechable) para probar el camino real de un PC sin driver de GPU y sin el
+          # VC++ redist. vcomp140.dll debe salir de dist\, junto al exe.
+          foreach ($dll in "C:\Windows\System32\vulkan-1.dll", "C:\Windows\System32\vcomp140.dll") {
+            if (Test-Path $dll) {
+              takeown /f $dll | Out-Null
+              icacls $dll /grant "*S-1-5-32-544:F" | Out-Null
+              Remove-Item -Force $dll
+            }
+            if (Test-Path $dll) { throw "no se pudo quitar $dll" }
           }
-          if (Test-Path $dll) { throw "no se pudo quitar vulkan-1.dll" }
+          if (-not (Test-Path dist\vcomp140.dll)) { throw "falta vcomp140.dll junto al exe en el artefacto" }
           $out = & dist\anotalo.exe selftest --model dist\ggml-tiny.bin --wav dist\jfk.wav | Out-String
           $out
           if ($LASTEXITCODE -ne 0) { throw "selftest terminó con $LASTEXITCODE" }
