@@ -63,6 +63,7 @@ dependencies = [
  "anotalo-core",
  "log",
  "windows",
+ "windows-core",
 ]
 
 [[package]]

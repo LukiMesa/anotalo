@@ -6,5 +6,6 @@ pub mod models;
 pub mod resample;
 pub mod routing;
 pub mod segmenter;
+pub mod source;
 pub mod transcript;
 pub mod vad;

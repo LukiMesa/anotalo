@@ -18,7 +18,7 @@ use windows::Win32::Media::Audio::{
     eCommunications, eConsole, eRender,
 };
 use windows::Win32::Storage::Packaging::Appx::GetPackageFamilyName;
-use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToStringAlloc};
+use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
     CoUninitialize, STGM_READ,
@@ -41,12 +41,14 @@ pub struct Snapshot {
     pub console: Option<String>,
 }
 
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub fn render_snapshot() -> Result<Snapshot, String> {
-    in_mta(|| snapshot(eRender))
+    in_mta(SNAPSHOT_TIMEOUT, || snapshot(eRender))
 }
 
 pub fn capture_snapshot() -> Result<Snapshot, String> {
-    in_mta(|| snapshot(eCapture))
+    in_mta(SNAPSHOT_TIMEOUT, || snapshot(eCapture))
 }
 
 /// Programas grabando de algún micrófono ahora mismo (claves como las del registro).
@@ -67,10 +69,10 @@ pub fn key_for_pid(pid: u32) -> Option<String> {
 }
 
 /// COM iniciado en este hilo mientras viva.
-struct Com;
+pub(crate) struct Com;
 
 impl Com {
-    fn init_mta() -> Result<Com, String> {
+    pub(crate) fn init_mta() -> Result<Com, String> {
         // SAFETY: se empareja con CoUninitialize en Drop, en el mismo hilo.
         unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
             .ok()
@@ -87,7 +89,8 @@ impl Drop for Com {
 }
 
 /// Core Audio necesita COM: se usa en un hilo propio (quien llama puede ser el hilo de la ventana).
-fn in_mta<T: Send + 'static>(
+pub(crate) fn in_mta<T: Send + 'static>(
+    timeout: Duration,
     f: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     let (tx, rx) = mpsc::channel();
@@ -98,7 +101,7 @@ fn in_mta<T: Send + 'static>(
             let _ = tx.send(result);
         })
         .map_err(|e| format!("no se pudo arrancar el hilo de Core Audio: {e}"))?;
-    match rx.recv_timeout(Duration::from_secs(5)) {
+    match rx.recv_timeout(timeout) {
         Ok(result) => result,
         Err(RecvTimeoutError::Timeout) => Err("Core Audio no respondió".into()),
         Err(RecvTimeoutError::Disconnected) => Err("Core Audio falló".into()),
@@ -185,14 +188,13 @@ unsafe fn device_id(dev: &IMMDevice) -> Option<String> {
 }
 
 unsafe fn device_name(dev: &IMMDevice) -> Option<String> {
-    // SAFETY: ver `snapshot`; el PROPVARIANT se libera con PropVariantClear.
+    // SAFETY: ver `snapshot`; el PROPVARIANT se libera solo (su Drop llama a PropVariantClear).
     unsafe {
         let store = dev.OpenPropertyStore(STGM_READ).ok()?;
-        let mut pv = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
+        let pv = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
         let name = PropVariantToStringAlloc(&pv)
             .ok()
             .and_then(|p| take_string(p));
-        let _ = PropVariantClear(&mut pv);
         name.filter(|n| !n.is_empty())
     }
 }
@@ -209,6 +211,14 @@ unsafe fn default_id(
 struct Proc {
     parent: u32,
     exe: String,
+}
+
+/// Todos los procesos como (pid, exe, pid del padre).
+pub(crate) fn process_list() -> Vec<(u32, String, u32)> {
+    processes()
+        .into_iter()
+        .map(|(pid, p)| (pid, p.exe, p.parent))
+        .collect()
 }
 
 /// Todos los procesos: su padre y el nombre de su exe.
