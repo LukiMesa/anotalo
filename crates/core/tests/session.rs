@@ -110,6 +110,7 @@ fn cfg(dir: &Path, label: &str) -> SessionConfig {
         silence_ms: 600,
         max_segment_s: 25.0,
         min_segment_ms: 300,
+        title: None,
     }
 }
 
@@ -301,4 +302,33 @@ fn lines_follow_speaking_order_across_lanes() {
         at("**[00:00:06] Yo:**"),
     ];
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{text}");
+}
+
+#[test]
+fn test_mark_lands_between_lines() {
+    // "Yo" habla a los 0,5 s y "Otros" a los 3 s; la marca se pone hacia 1,5 s (reloj real).
+    let d = tempfile::tempdir().unwrap();
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let sink = lines.clone();
+    let on_line: OnLine =
+        Box::new(move |who, _hms, _t, _text| sink.lock().unwrap().push(who.to_string()));
+    let sess = start(
+        d.path(),
+        FakeSource::new(&[0.5]),
+        Some(FakeSource::new(&[3.0])),
+        None,
+        Some(on_line),
+        None,
+    );
+    std::thread::sleep(Duration::from_millis(1500));
+    let at = sess.mark().expect("marca");
+    assert!(at > 1.0 && at < 2.7, "{at}");
+    let text = read(&sess.stop().unwrap());
+    let (yo, marca, otros) = (
+        text.find("Yo:**").unwrap(),
+        text.find("Marca**").unwrap(),
+        text.find("Otros:**").unwrap(),
+    );
+    assert!(yo < marca && marca < otros, "{text}");
+    assert!(lines.lock().unwrap().iter().any(|w| w == "Marca"));
 }

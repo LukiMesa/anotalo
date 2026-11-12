@@ -155,3 +155,14 @@ def test_bad_values_never_empty_the_list(tmp_path):
     (tmp_path / "2026-10-23_1120_Nota.md").write_text(NOTE, encoding="utf-8")
     ids = {r.id for r in list_recordings(tmp_path)}
     assert ids == {"2026-10-23_1300_Teams.md", "2026-02-30_1000_Meet.md", "2026-10-23_1120_Nota.md"}
+
+
+def test_reads_anotalo_title_and_marks():
+    """Un archivo de Anotalo con título y marcas se sigue leyendo en la app de Python."""
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parents[1] / "crates" / "core" / "tests" / "fixtures" / "transcript_rust_title_marks.md"
+    rec = parse_recording(fixture)
+    assert rec.kind == "call" and rec.app == "Teams"
+    assert [(l.speaker, l.text) for l in rec.lines] == [("Otros", "Hola, ¿empezamos?"), ("Yo", "Sí, adelante.")]
+    assert rec.duration_s == 53

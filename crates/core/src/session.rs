@@ -34,6 +34,8 @@ pub struct SessionConfig {
     pub silence_ms: u32,
     pub max_segment_s: f64,
     pub min_segment_ms: u32,
+    /// Título de la reunión (`- Título:` en la cabecera), si se conoce.
+    pub title: Option<String>,
 }
 
 /// (hablante, "HH:MM:SS", inicio en s, texto) de cada línea nueva.
@@ -58,6 +60,9 @@ struct Lane {
 
 struct Shared {
     writer: Arc<TranscriptWriter>,
+    /// Inicio de la sesión según `now_s()`: los tiempos del archivo cuentan desde aquí.
+    t0: f64,
+    on_line: Option<Arc<Mutex<OnLine>>>,
     lanes: Mutex<Vec<Lane>>,
     stopping: Mutex<bool>,
     stop_changed: Condvar,
@@ -148,6 +153,18 @@ fn on_audio(tx: Sender<Msg>, level: Option<Arc<Mutex<OnLevel>>>) -> OnAudio {
     })
 }
 
+/// Avisa de una línea nueva; un fallo de quien escucha no para la transcripción.
+fn notify_line(cb: Option<&Arc<Mutex<OnLine>>>, speaker: &str, start_s: f64, text: &str) {
+    if let Some(cb) = cb
+        && let Ok(cb) = cb.lock()
+    {
+        let hms = fmt_elapsed(start_s);
+        if catch_unwind(AssertUnwindSafe(|| cb(speaker, &hms, start_s, text))).is_err() {
+            log::error!("Error notificando una línea");
+        }
+    }
+}
+
 type OnResult = Arc<dyn Fn(Segment, String) + Send + Sync>;
 
 fn lane_worker(
@@ -202,16 +219,19 @@ impl CallSession {
             &cfg.output_dir,
             &cfg.app_label,
             started_at,
+            cfg.title.as_deref(),
             Box::new(now_s),
         )?);
+        let on_line = on_line.map(|cb| Arc::new(Mutex::new(cb)));
         let shared = Arc::new(Shared {
             writer: writer.clone(),
+            t0,
+            on_line: on_line.clone(),
             lanes: Mutex::new(Vec::new()),
             stopping: Mutex::new(false),
             stop_changed: Condvar::new(),
             others_factory: others_factory.map(Mutex::new),
         });
-        let on_line = on_line.map(Mutex::new);
         let on_result: OnResult = Arc::new(move |seg: Segment, text: String| {
             if writer
                 .add(&seg.speaker, seg.start_s, &text, Some(seg.end_s))
@@ -219,18 +239,7 @@ impl CallSession {
             {
                 return;
             }
-            if let Some(cb) = &on_line
-                && let Ok(cb) = cb.lock()
-            {
-                let hms = fmt_elapsed(seg.start_s);
-                if catch_unwind(AssertUnwindSafe(|| {
-                    cb(&seg.speaker, &hms, seg.start_s, &text)
-                }))
-                .is_err()
-                {
-                    log::error!("Error notificando una línea");
-                }
-            }
+            notify_line(on_line.as_ref(), &seg.speaker, seg.start_s, &text);
         });
 
         let mut sources = vec![(mic, cfg.label_me.clone())];
@@ -275,6 +284,15 @@ impl CallSession {
             workers,
             ticker: Some(ticker),
         })
+    }
+
+    /// Marca ahora mismo (`**[HH:MM:SS] Marca**`) y la avisa como línea "Marca". Devuelve el
+    /// segundo de la llamada, o None si ya se cerró.
+    pub fn mark(&self) -> Option<f64> {
+        let at = (now_s() - self.shared.t0).max(0.0);
+        self.shared.writer.add_mark(at)?;
+        notify_line(self.shared.on_line.as_ref(), "Marca", at, "");
+        Some(at)
     }
 
     pub fn path(&self) -> &Path {

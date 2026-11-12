@@ -38,7 +38,7 @@ impl Clock {
 fn make(dir: &tempfile::TempDir, app: &str) -> (TranscriptWriter, Clock) {
     let clock = Clock::default();
     (
-        TranscriptWriter::new(dir.path(), app, start(), clock.boxed()).unwrap(),
+        TranscriptWriter::new(dir.path(), app, start(), None, clock.boxed()).unwrap(),
         clock,
     )
 }
@@ -170,6 +170,7 @@ fn test_manual_call_header_says_manual() {
         d.path(),
         "Llamada",
         dt(2026, 11, 11, 11, 43, 0),
+        None,
         Box::new(|| 0.0),
     )
     .unwrap();
@@ -185,8 +186,14 @@ fn test_manual_call_header_says_manual() {
 fn golden_matches_python_byte_for_byte() {
     let d = tempfile::tempdir().unwrap();
     let clock = Clock::default();
-    let w =
-        TranscriptWriter::new(d.path(), "Teams", dt(2026, 11, 11, 9, 5, 7), clock.boxed()).unwrap();
+    let w = TranscriptWriter::new(
+        d.path(),
+        "Teams",
+        dt(2026, 11, 11, 9, 5, 7),
+        None,
+        clock.boxed(),
+    )
+    .unwrap();
     w.add("Otros", 1.2, "Hola, ¿me oyes?", Some(2.4));
     w.add("Yo", 3.0, "Sí, perfecto.", Some(3.8));
     w.add("Yo", 4.5, "Empezamos.", Some(5.0));
@@ -208,8 +215,125 @@ fn golden_matches_python_byte_for_byte() {
 fn accented_output_dir() {
     let d = tempfile::tempdir().unwrap();
     let dir = d.path().join("José").join("Llamadas");
-    let w = TranscriptWriter::new(&dir, "Teams", start(), Box::new(|| 0.0)).unwrap();
+    let w = TranscriptWriter::new(&dir, "Teams", start(), None, Box::new(|| 0.0)).unwrap();
     w.add("Yo", 1.0, "Hola", None);
     let path = w.close(end()).unwrap();
     assert!(path.starts_with(&dir) && read(&path).contains("Hola"));
+}
+
+fn titled(dir: &tempfile::TempDir, title: &str) -> (TranscriptWriter, Clock) {
+    let clock = Clock::default();
+    (
+        TranscriptWriter::new(dir.path(), "Teams", start(), Some(title), clock.boxed()).unwrap(),
+        clock,
+    )
+}
+
+#[test]
+fn test_header_with_title() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = titled(&d, "Reunión con Acme");
+    let open: Vec<String> = read(w.path()).lines().map(String::from).collect();
+    assert_eq!(
+        open[..6],
+        [
+            "# Llamada — Teams — 2026-10-23 15:04",
+            "",
+            "- Inicio: 15:04:12",
+            "- Título: Reunión con Acme",
+            "",
+            "---"
+        ]
+    );
+    let closed: Vec<String> = read(&w.close(end()).unwrap())
+        .lines()
+        .map(String::from)
+        .collect();
+    assert_eq!(
+        closed[2..6],
+        [
+            "- Inicio: 15:04:12",
+            "- Fin: 15:41:03",
+            "- Duración: 00:36:51",
+            "- Título: Reunión con Acme"
+        ]
+    );
+}
+
+#[test]
+fn test_title_with_newline_is_one_line() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = titled(&d, " Reunión\ncon  Acme ");
+    assert!(read(w.path()).contains("\n- Título: Reunión con Acme\n"));
+}
+
+#[test]
+fn test_mark_line_format() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = make(&d, "Teams");
+    assert_eq!(w.add_mark(65.4).as_deref(), Some("**[00:01:05] Marca**"));
+    assert!(read(&w.close(end()).unwrap()).contains("\n**[00:01:05] Marca**\n\n"));
+    assert_eq!(w.add_mark(70.0), None, "cerrado: no se marca");
+}
+
+#[test]
+fn test_mark_breaks_same_speaker_merge() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = make(&d, "Teams");
+    w.add("Otros", 1.0, "Necesito", Some(2.0));
+    w.add_mark(2.2);
+    w.add("Otros", 2.5, "un botón azul.", Some(4.0));
+    let text = read(&w.close(end()).unwrap());
+    assert_eq!(text.matches("Otros:**").count(), 2, "{text}");
+}
+
+#[test]
+fn test_mark_not_in_plain_texts() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = make(&d, "Teams");
+    w.add("Yo", 1.0, "Hola", Some(2.0));
+    w.add_mark(3.0);
+    assert_eq!(w.plain_texts(), vec!["Hola"]);
+    assert!(w.text().contains("**[00:00:03] Marca**"));
+}
+
+#[test]
+fn test_marks_ordered_by_time() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = make(&d, "Teams");
+    w.add("Otros", 10.0, "segundo", Some(11.0));
+    w.add_mark(5.0);
+    w.add("Yo", 2.0, "primero", Some(3.0));
+    let text = read(&w.close(end()).unwrap());
+    let (a, b, c) = (
+        text.find("primero").unwrap(),
+        text.find("Marca").unwrap(),
+        text.find("segundo").unwrap(),
+    );
+    assert!(a < b && b < c, "{text}");
+}
+
+#[test]
+fn test_rust_fixture_with_title_and_marks() {
+    let d = tempfile::tempdir().unwrap();
+    let clock = Clock::default();
+    let w = TranscriptWriter::new(
+        d.path(),
+        "Teams",
+        dt(2026, 11, 11, 9, 5, 7),
+        Some("Reunión con Acme"),
+        clock.boxed(),
+    )
+    .unwrap();
+    w.add("Otros", 1.2, "Hola, ¿empezamos?", Some(1.9));
+    w.add_mark(2.5);
+    w.add("Yo", 3.0, "Sí, adelante.", Some(3.8));
+    let got = std::fs::read(w.close(dt(2026, 11, 11, 9, 6, 0)).unwrap()).unwrap();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/transcript_rust_title_marks.md");
+    let want = std::fs::read(fixture).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&got),
+        String::from_utf8_lossy(&want)
+    );
 }

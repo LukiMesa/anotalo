@@ -27,10 +27,15 @@ struct Pending {
     end_s: f64,
     text: String,
     arrived: f64,
+    /// Una marca (`**[HH:MM:SS] Marca**`), no una frase.
+    mark: bool,
 }
 
 impl Pending {
     fn render(&self) -> String {
+        if self.mark {
+            return format!("**[{}] Marca**", fmt_elapsed(self.start_s));
+        }
         format!(
             "**[{}] {}:** {}",
             fmt_elapsed(self.start_s),
@@ -52,6 +57,8 @@ pub struct TranscriptWriter {
     path: PathBuf,
     app: String,
     started_at: NaiveDateTime,
+    /// Título de la reunión (`- Título:`), en una línea.
+    title: Option<String>,
     clock: Box<dyn Fn() -> f64 + Send + Sync>,
     state: Mutex<State>,
 }
@@ -61,6 +68,7 @@ impl TranscriptWriter {
         dir: &Path,
         app: &str,
         started_at: NaiveDateTime,
+        title: Option<&str>,
         clock: Box<dyn Fn() -> f64 + Send + Sync>,
     ) -> io::Result<TranscriptWriter> {
         fs::create_dir_all(dir)?;
@@ -70,6 +78,9 @@ impl TranscriptWriter {
             path,
             app: app.to_string(),
             started_at,
+            title: title
+                .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|t| !t.is_empty()),
             clock,
             state: Mutex::new(State {
                 file: None,
@@ -108,6 +119,10 @@ impl TranscriptWriter {
             lines.push(format!("- Fin: {}", end.format("%H:%M:%S")));
             lines.push(format!("- Duración: {}", fmt_elapsed(dur)));
         }
+        // La app de Python ignora las líneas de cabecera que no conoce.
+        if let Some(t) = &self.title {
+            lines.push(format!("- Título: {t}"));
+        }
         lines.extend([String::new(), "---".into(), String::new(), String::new()]);
         lines.join("\n")
     }
@@ -138,7 +153,10 @@ impl TranscriptWriter {
         }
         let merge = last.filter(|&j| {
             let l = &st.pending[j];
-            l.speaker == speaker && start_s >= l.start_s && start_s - l.end_s < MERGE_GAP_S
+            !l.mark
+                && l.speaker == speaker
+                && start_s >= l.start_s
+                && start_s - l.end_s < MERGE_GAP_S
         });
         match merge {
             Some(j) => {
@@ -155,10 +173,32 @@ impl TranscriptWriter {
                     end_s,
                     text: text.clone(),
                     arrived,
+                    mark: false,
                 });
             }
         }
         Some(format!("**[{}] {speaker}:** {text}", fmt_elapsed(start_s)))
+    }
+
+    /// Marca en `at_s` (`**[HH:MM:SS] Marca**`): se ordena con las frases, nunca se une a ellas y
+    /// corta la unión de dos frases del mismo hablante. None si ya está cerrado.
+    pub fn add_mark(&self, at_s: f64) -> Option<String> {
+        let mut st = self.state.lock().unwrap();
+        if st.closed {
+            return None;
+        }
+        let arrived = (self.clock)();
+        let mark = Pending {
+            speaker: String::new(),
+            start_s: at_s,
+            end_s: at_s,
+            text: String::new(),
+            arrived,
+            mark: true,
+        };
+        let line = mark.render();
+        st.pending.push(mark);
+        Some(line)
     }
 
     /// Escribe, en orden, las frases que ya cumplieron la espera.
@@ -213,7 +253,12 @@ impl TranscriptWriter {
     pub fn plain_texts(&self) -> Vec<String> {
         let st = self.state.lock().unwrap();
         let mut texts = st.written_texts.clone();
-        texts.extend(sorted_pending(&st).iter().map(|p| p.text.clone()));
+        texts.extend(
+            sorted_pending(&st)
+                .iter()
+                .filter(|p| !p.mark)
+                .map(|p| p.text.clone()),
+        );
         texts
     }
 }
@@ -228,7 +273,7 @@ fn emit(st: &mut State, items: &[Pending]) -> io::Result<()> {
     let rendered: Vec<String> = items.iter().map(Pending::render).collect();
     st.written.extend(rendered.iter().cloned());
     st.written_texts
-        .extend(items.iter().map(|p| p.text.clone()));
+        .extend(items.iter().filter(|p| !p.mark).map(|p| p.text.clone()));
     let chunk: String = rendered.iter().map(|r| format!("{r}\n\n")).collect();
     match st.file.as_mut() {
         Some(f) => write_synced(f, &chunk),
