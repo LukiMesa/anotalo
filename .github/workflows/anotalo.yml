@@ -96,7 +96,7 @@ jobs:
         run: cargo clippy --release --all-targets -- -D warnings
 
       - name: Tests
-        run: cargo test --release --workspace
+        run: cargo test --release --workspace --no-fail-fast
 
       - name: Compilar (exe y bench)
         run: |

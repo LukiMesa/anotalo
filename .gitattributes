@@ -1,0 +1,6 @@
+# Fixtures compared byte for byte, and binary assets: never convert line endings (the Windows
+# CI runner checks text out with CRLF).
+crates/core/tests/fixtures/** -text
+*.onnx binary
+*.wav binary
+*.bin binary
