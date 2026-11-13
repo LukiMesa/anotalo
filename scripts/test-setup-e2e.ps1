@@ -198,7 +198,13 @@ try {
     Write-Host "  SHA-256 de la grabación: $recSha"
 
     Step 3 "el botón Actualizar de 0.6.4 (su updater.py: comprobar, descargar y lanzar el instalador)"
-    $code = Invoke-Native { & $Python -I -X utf8 (Join-Path $repo "scripts\fixtures\update_chain.py") --setup $Setup | Out-Host }
+    # desde la carpeta de Transcriptor, como 0.6.4 (su Popen hereda la carpeta de trabajo de la app):
+    # el instalador tiene que salir de ella para poder borrarla
+    Push-Location -LiteralPath $innoDir
+    try {
+        $code = Invoke-Native { & $Python -I -X utf8 (Join-Path $repo "scripts\fixtures\update_chain.py") --setup $Setup | Out-Host }
+    }
+    finally { Pop-Location }
     if ($code -ne 0) { Fail "update_chain.py terminó con $code" }
 
     Step 4 "Anotalo sustituye a Transcriptor"

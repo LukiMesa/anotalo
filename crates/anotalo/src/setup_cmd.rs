@@ -4,7 +4,7 @@
 //! Registra en `%APPDATA%\Anotalo\setup.log`. En silencio no pregunta nada; si no, abre su
 //! ventana (`setup_ui`), o cuadros de mensaje sin WebView2.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -71,12 +71,31 @@ pub fn uninstalled_text(recordings: &Path) -> String {
     )
 }
 
+/// Sin las instrucciones que necesita el motor de transcripción, Anotalo no arrancaría.
+pub fn unsupported_cpu_text(missing: &[&str]) -> String {
+    let names: Vec<String> = missing.iter().map(|m| m.to_uppercase()).collect();
+    format!(
+        "Anotalo no puede funcionar en este PC: a su procesador le faltan instrucciones \
+         que necesita la transcripción ({}). No he cambiado nada.",
+        names.join(", ")
+    )
+}
+
 pub fn run(mode: SetupMode) -> ExitCode {
     let silent = match mode {
         SetupMode::Install { silent } | SetupMode::Uninstall { silent } => silent,
     };
-    // lanzado desde una terminal, el registro también sale por ella
-    let to_console = crate::console::attach_parent();
+    // fuera de la carpeta de quien lo lanzó (la de Transcriptor, si lo lanza su actualizador): si
+    // no, esa carpeta no se puede borrar
+    let system32 = std::env::var_os("SystemRoot")
+        .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+        .join("System32");
+    if let Err(e) = std::env::set_current_dir(&system32) {
+        eprintln!("No se pudo cambiar de carpeta: {e}");
+    }
+    // nunca enganchado a una terminal: un Ctrl+C en ella cortaría la instalación a medias. El
+    // registro va a setup.log, y a la salida que nos hayan dado (redirigida), si la hay.
+    let to_console = crate::console::has_output();
     let layout = match Layout::current() {
         Ok(l) => l,
         Err(e) => {
@@ -119,6 +138,26 @@ pub fn run(mode: SetupMode) -> ExitCode {
 }
 
 fn run_install(l: &Layout, exe: &Path, silent: bool) -> ExitCode {
+    run_install_with(l, exe, silent, &anotalo_whisper::missing_cpu_features)
+}
+
+/// `cpu_missing`: las instrucciones que le faltan al procesador (inyectable para los tests).
+fn run_install_with(
+    l: &Layout,
+    exe: &Path,
+    silent: bool,
+    cpu_missing: &dyn Fn() -> Vec<&'static str>,
+) -> ExitCode {
+    // antes de tocar nada: si Anotalo no puede arrancar aquí, Transcriptor se queda como está
+    let missing = cpu_missing();
+    if !missing.is_empty() {
+        let text = unsupported_cpu_text(&missing);
+        log::error!("{text}");
+        if !silent {
+            dialog::tell(&text);
+        }
+        return ExitCode::from(1);
+    }
     let sys = RealSystem::new();
     let found = inspect(l, &sys);
     log::info!(
@@ -321,6 +360,27 @@ pub fn preview(mode: &str) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// En un procesador sin las instrucciones del motor (Celeron N, Sandy Bridge…), Anotalo no
+    /// arrancaría: el instalador no toca nada, así Transcriptor sigue funcionando.
+    #[test]
+    fn test_unsupported_cpu_touches_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let key = format!(r"Software\AnotaloTest\cpu-{}", std::process::id());
+        let l = Layout::for_test(d.path(), &key);
+        let code = run_install_with(&l, Path::new(r"C:\no\existe.exe"), true, &|| vec!["avx2"]);
+        assert_eq!(code, ExitCode::from(1));
+        assert_eq!(
+            std::fs::read_dir(d.path()).unwrap().count(),
+            0,
+            "nada creado"
+        );
+        assert_eq!(
+            unsupported_cpu_text(&["avx2", "fma"]),
+            "Anotalo no puede funcionar en este PC: a su procesador le faltan instrucciones \
+             que necesita la transcripción (AVX2, FMA). No he cambiado nada."
+        );
+    }
 
     #[test]
     fn embedded_vcomp_is_a_dll() {

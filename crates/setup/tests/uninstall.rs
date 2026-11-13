@@ -237,3 +237,58 @@ fn test_self_delete_removes_the_exe_and_its_folder() {
     assert!(!exe.exists() && !dir.exists());
     assert!(d.path().join("Ana María & Co").exists(), "solo su carpeta");
 }
+
+/// La carpeta de grabaciones escrita de otra forma (con `..`) sigue contando como suya: la casilla
+/// de borrar ajustes no la toca.
+#[test]
+fn test_purge_keeps_recordings_written_another_way() {
+    let e = Env::new();
+    e.installed();
+    let inside = e.l.data_dir().join("grabaciones");
+    fs::create_dir_all(&inside).unwrap();
+    fs::write(inside.join("a.md"), "x").unwrap();
+    let roundabout =
+        e.l.data_dir()
+            .parent()
+            .unwrap()
+            .join("Otra")
+            .join("..")
+            .join("Anotalo")
+            .join("grabaciones");
+    fs::write(
+        e.l.data_dir().join("config.json"),
+        serde_json::json!({"output_dir": roundabout}).to_string(),
+    )
+    .unwrap();
+    let r = uninstall(
+        &e.l,
+        true,
+        &FakeSystem::default(),
+        Path::new(r"C:\otro.exe"),
+    );
+    assert!(inside.join("a.md").exists(), "{:?}", r.problems);
+}
+
+/// Aunque ningún ajuste lo diga, una carpeta con transcripciones (`.md`) dentro no se borra.
+#[test]
+fn test_purge_never_deletes_a_tree_with_transcripts() {
+    let e = Env::new();
+    e.installed();
+    let stray = e.l.local_dir().join("copias");
+    fs::create_dir_all(&stray).unwrap();
+    fs::write(stray.join("2026-11-12_1000_Teams.md"), "x").unwrap();
+    let r = uninstall(
+        &e.l,
+        true,
+        &FakeSystem::default(),
+        Path::new(r"C:\otro.exe"),
+    );
+    assert!(stray.join("2026-11-12_1000_Teams.md").exists());
+    assert!(
+        r.problems
+            .iter()
+            .any(|p| p.contains("contiene tus grabaciones")),
+        "{:?}",
+        r.problems
+    );
+}

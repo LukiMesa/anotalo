@@ -699,3 +699,16 @@ fn test_live_path_names_the_recording() {
     h.app.toggle();
     assert_eq!(h.app.live_path(), None, "ya guardada");
 }
+
+/// El instalador pide cerrar la app y espera 90 s antes de forzarla: guardar la grabación en curso
+/// no espera más que el plazo que se le da (lo que falte se pierde, pero el archivo se cierra bien).
+#[test]
+fn test_quit_within_bounds_the_save() {
+    let h = h();
+    *h.stop_delay.lock().unwrap() = Duration::from_secs(10);
+    h.on_start(teams());
+    let t0 = Instant::now();
+    h.app.quit_within(Duration::from_millis(300));
+    assert!(t0.elapsed() < Duration::from_secs(3), "{:?}", t0.elapsed());
+    assert!(!h.app.recording_active());
+}

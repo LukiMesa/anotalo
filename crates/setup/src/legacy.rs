@@ -126,11 +126,45 @@ pub(crate) fn recordings_dirs(l: &Layout) -> Vec<PathBuf> {
         .collect()
 }
 
-/// `dir` es o contiene alguna de `recordings` (sin distinguir mayúsculas).
+/// `dir` es o contiene alguna de `recordings`, o guarda transcripciones aunque ningún ajuste lo
+/// diga: entonces no se borra.
 pub(crate) fn contains_any(dir: &Path, recordings: &[PathBuf]) -> bool {
-    let low = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
-    let dir = low(dir);
-    recordings.iter().any(|rec| low(rec).starts_with(&dir))
+    let dir_n = normalized(dir);
+    recordings
+        .iter()
+        .any(|rec| normalized(rec).starts_with(&dir_n))
+        || holds_transcripts(dir)
+}
+
+/// La ruta comparable: completa, sin `..`, con los nombres largos y los enlaces resueltos si
+/// existe, sin el prefijo `\\?\` y en minúsculas.
+fn normalized(p: &Path) -> PathBuf {
+    let full = fs::canonicalize(p)
+        .or_else(|_| std::path::absolute(p))
+        .unwrap_or_else(|_| p.to_path_buf());
+    let s = full.to_string_lossy().to_lowercase();
+    let s = match s.strip_prefix(r"\\?\unc\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => s.strip_prefix(r"\\?\").map_or(s.clone(), str::to_string),
+    };
+    PathBuf::from(s)
+}
+
+/// Hay transcripciones (`.md`) o una papelera de Anotalo en algún sitio dentro de `dir`. Las
+/// carpetas de ajustes, modelos y cachés nunca las tienen.
+fn holds_transcripts(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        let path = e.path();
+        let name = e.file_name().to_string_lossy().to_lowercase();
+        match e.file_type() {
+            Ok(t) if t.is_dir() => name == ".papelera" || holds_transcripts(&path),
+            Ok(_) => name.ends_with(".md"),
+            Err(_) => false,
+        }
+    })
 }
 
 /// Si Transcriptor arrancaba con Windows: su acceso directo de inicio; si no está, el `autostart`

@@ -10,6 +10,9 @@ use std::time::Instant;
 use anotalo_core::models::CATALOG;
 use anotalo_core::routing::PLATFORMS;
 use anotalo_whisper::{DeviceKind, LoadOptions, Model, Params, devices};
+use windows::Win32::System::LibraryLoader::{
+    LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories,
+};
 
 mod claude_code;
 mod console;
@@ -336,6 +339,10 @@ fn mcp() -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // Lo primero: las DLL que se carguen por nombre, solo de System32, nunca de la carpeta del exe
+    // (el instalador se abre desde Descargas). vcomp140, vulkan-1 y WebView2 se cargan por ruta.
+    // SAFETY: sin punteros; afecta a las cargas de DLL de este proceso.
+    let _ = unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) };
     let args: Vec<String> = std::env::args().skip(1).collect();
     // Lo primero: el mismo exe es el instalador (`Anotalo-Setup-….exe`, `/VERYSILENT`, `--install`)
     // y el desinstalador (`--uninstall`).

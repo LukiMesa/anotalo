@@ -81,6 +81,11 @@ pub fn tray_wants_console(var: Option<&OsStr>) -> bool {
     var.is_some_and(|v| v == "1")
 }
 
+/// ¿Hay a dónde escribir sin engancharse a nada? (salida o errores redirigidos)
+pub fn has_output() -> bool {
+    !missing(STD_OUTPUT_HANDLE) || !missing(STD_ERROR_HANDLE)
+}
+
 /// Para la app de la bandeja: se engancha a la terminal solo si se pide, y entonces ignora Ctrl+C
 /// (cerrar la terminal sí la cierra: es solo para desarrollo). Devuelve si hay dónde escribir.
 pub fn attach_for_tray() -> bool {

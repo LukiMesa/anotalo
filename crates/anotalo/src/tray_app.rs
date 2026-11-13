@@ -89,6 +89,9 @@ const TOAST_ICON: &[u8] = include_bytes!("../assets/anotalo-256.png");
 /// El instalador pide salir (evento `quit_event`): se sale como con "Salir", guardando la
 /// grabación en curso.
 const WM_APP_QUIT_REQUEST: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 8;
+/// Lo que se da para guardar la grabación en curso cuando el instalador pide cerrar (él espera
+/// 90 s antes de cerrar la app a la fuerza).
+const INSTALLER_QUIT_WAIT: Duration = Duration::from_secs(60);
 /// Al salir con "Salir", lo que se espera a que se vean los avisos pendientes.
 const TOASTS_WAIT: Duration = Duration::from_secs(3);
 /// Lo que un hilo de las órdenes espera a que el hilo principal cambie un atajo o mueva la
@@ -625,6 +628,8 @@ struct Shell {
     clicks: Debounce,
     toasts: Arc<Toasts>,
     quitting: Cell<bool>,
+    /// Plazo para guardar al salir (lo pide el instalador); None: sin plazo.
+    quit_wait: Cell<Option<Duration>>,
     /// Ya se pidió el fin del bucle de mensajes (`post_quit`).
     quit_posted: Cell<bool>,
     /// Solo en la versión instalada.
@@ -888,11 +893,15 @@ impl Shell {
                 log::info!("Cerrando Anotalo");
                 let hwnd = self.hwnd;
                 let rect = self.with_window(MainWindow::rect);
+                let wait = self.quit_wait.get();
                 in_background("salir", move || {
                     if let Some(r) = rect {
                         save_rect(&app, r);
                     }
-                    app.quit();
+                    match wait {
+                        Some(w) => app.quit_within(w),
+                        None => app.quit(),
+                    }
                     window::post(hwnd, WM_APP_QUIT_DONE, 0);
                 });
             }
@@ -945,6 +954,8 @@ impl Handler for Shell {
             WM_APP_CALL => self.calls.run_pending(self),
             WM_APP_QUIT_REQUEST => {
                 log::info!("Cerrando Anotalo: lo pide el instalador");
+                // el instalador espera 90 s antes de forzarla: guardar no puede pasar de ahí
+                self.quit_wait.set(Some(INSTALLER_QUIT_WAIT));
                 self.command(TrayCommand::Quit);
             }
             WM_APP_SHOW => {
@@ -1337,6 +1348,7 @@ pub fn run() -> ExitCode {
         }))),
         toasts,
         quitting: Cell::new(false),
+        quit_wait: Cell::new(None),
         quit_posted: Cell::new(false),
         updater,
         update_version: RefCell::new(None),

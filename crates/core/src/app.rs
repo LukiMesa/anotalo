@@ -307,7 +307,13 @@ impl App {
     /// Como `quit`, cuando Windows se apaga a la fuerza: no se espera más de `FAST_QUIT_WAIT` a
     /// lo que quede por transcribir (tampoco si ya se estaba guardando una grabación).
     pub fn quit_fast(&self) {
-        self.hurry.within(FAST_QUIT_WAIT);
+        self.quit_within(FAST_QUIT_WAIT);
+    }
+
+    /// Salir con un plazo para guardar lo que falte por transcribir (el instalador espera un rato
+    /// y después cierra la app a la fuerza): pasado el plazo, se cierra el archivo con lo que haya.
+    pub fn quit_within(&self, wait: Duration) {
+        self.hurry.within(wait);
         self.quit();
     }
 
