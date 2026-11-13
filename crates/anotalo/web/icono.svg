@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Anotalo"><title>Anotalo</title>
+<rect width="256" height="256" rx="56" fill="#161C2B"/>
+<g><defs><linearGradient id="as-g" gradientUnits="userSpaceOnUse" x1="40.00" y1="24.00" x2="216.00" y2="232.00"><stop offset="0" stop-color="#EEF3F7"/><stop offset="0.55" stop-color="#EEF3F7"/><stop offset="1" stop-color="#D9E1E8"/></linearGradient><mask id="as-body" maskUnits="userSpaceOnUse" x="-40" y="-40" width="336" height="336"><rect x="-40" y="-40" width="336" height="336" fill="#fff"/><path d="M14.00,158.00 A114.0,33.0 0 0 0 242.00,158.00" transform="rotate(-18.0 128.0 158.0)" fill="none" stroke="#000" stroke-width="52" stroke-linecap="round"/></mask></defs>
+<g mask="url(#as-body)" fill="url(#as-g)"><rect x="48.00" y="52.00" width="32" height="80.00" rx="16.0"/><rect x="96.00" y="20.00" width="32" height="144.00" rx="16.0"/><rect x="144.00" y="40.00" width="32" height="104.00" rx="16.0"/><rect x="192.00" y="64.00" width="32" height="56.00" rx="16.0"/></g>
+<path d="M14.00,158.00 A114.0,33.0 0 0 0 242.00,158.00" transform="rotate(-18.0 128.0 158.0)" fill="none" stroke="#2EC5E6" stroke-width="28" stroke-linecap="round"/>
+<circle cx="24.81" cy="177.42" r="22.00" fill="#A9B7C6"/><circle cx="20.41" cy="173.02" r="16.40" fill="#EEF3F7"/></g>
+</svg>

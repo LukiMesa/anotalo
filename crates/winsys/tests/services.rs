@@ -91,6 +91,35 @@ fn test_register_aumid_writes_display_name() {
     assert_eq!(String::from_utf16_lossy(&buf[..n]), "Anotalo (prueba)");
 }
 
+/// El icono de los avisos (Centro de actividades): `IconUri` con la ruta de un PNG.
+#[test]
+fn test_aumid_icon_uri_points_at_the_png() {
+    let aumid = format!("Anotalo.TestIcon.{}", std::process::id());
+    let png = std::env::temp_dir().join("anotalo icono á.png");
+    toast::register_aumid(&aumid, "Anotalo (prueba)").unwrap();
+    toast::set_aumid_icon(&aumid, &png).unwrap();
+    let key = HSTRING::from(format!(r"Software\Classes\AppUserModelId\{aumid}"));
+    let mut buf = [0u16; 260];
+    let mut size = (buf.len() * 2) as u32;
+    // SAFETY: búfer del tamaño indicado; la clave de prueba se borra después.
+    let rc = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(key.as_ptr()),
+            w!("IconUri"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+    };
+    // SAFETY: borra solo la clave de prueba.
+    let _ = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(key.as_ptr())) };
+    assert_eq!(rc, ERROR_SUCCESS);
+    let n = buf.iter().position(|&c| c == 0).unwrap();
+    assert_eq!(String::from_utf16_lossy(&buf[..n]), png.to_string_lossy());
+}
+
 #[test]
 #[ignore]
 fn clipboard_roundtrip() {

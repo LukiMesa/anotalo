@@ -1,5 +1,6 @@
 //! Icono en la bandeja del sistema (port de calltx/ui/tray.py): el icono de la app con un punto del
-//! color del estado, su menú y el texto al pasar el ratón.
+//! color del estado, su menú y el texto al pasar el ratón. El icono se dibuja al tamaño de la
+//! bandeja para el DPI del sistema, desde la base de ese tamaño (más nítido que escalar uno grande).
 
 use std::cell::Cell;
 
@@ -12,14 +13,18 @@ use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS,
     DeleteObject, HGDIOBJ,
 };
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem, GetSystemMetricsForDpi,
+    SetThreadDpiAwarenessContext,
+};
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
     Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
-    HICON, ICONINFO, MF_CHECKED, MF_SEPARATOR, MF_STRING, SetForegroundWindow, TPM_NONOTIFY,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
+    HICON, ICONINFO, MF_CHECKED, MF_SEPARATOR, MF_STRING, SM_CXSMICON, SetForegroundWindow,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
 };
 use windows::core::HSTRING;
 
@@ -136,12 +141,43 @@ fn fill_circle(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, c: (u8, u8, u8)) {
     }
 }
 
-/// Icono de 64×64 (RGBA sin premultiplicar): el de la app con el punto del estado.
-pub fn tray_icon_rgba(state: State) -> (u32, u32, Vec<u8>) {
-    let mut pm = Pixmap::new(64, 64).expect("64×64");
-    match Pixmap::decode_png(include_bytes!("../../../../calltx/ui/assets/icon.png")) {
+/// El icono de Anotalo dibujado para la bandeja a cada tamaño (16, 24 y 32 con la geometría
+/// pequeña, más gruesa).
+const BASES: [(u32, &[u8]); 5] = [
+    (16, include_bytes!("../../assets/tray-base-16.png")),
+    (20, include_bytes!("../../assets/tray-base-20.png")),
+    (24, include_bytes!("../../assets/tray-base-24.png")),
+    (32, include_bytes!("../../assets/tray-base-32.png")),
+    (64, include_bytes!("../../assets/tray-base-64.png")),
+];
+
+/// El tamaño de los iconos de la bandeja para el DPI del sistema (16 px al 100 %).
+fn tray_size() -> u32 {
+    // SAFETY: cambia el modo DPI del hilo un momento (para leer el DPI real) y lo deja como estaba.
+    let n = unsafe {
+        let before = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        let n = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForSystem());
+        if !before.0.is_null() {
+            SetThreadDpiAwarenessContext(before);
+        }
+        n
+    };
+    u32::try_from(n).ok().filter(|n| *n > 0).unwrap_or(16)
+}
+
+/// El icono de `size`×`size` (RGBA sin premultiplicar): el de la app con el punto del estado abajo
+/// a la derecha (centro a 13/16, anillo azul marino de 3/16 y el color en 2/16).
+pub fn tray_icon_rgba(state: State, size: u32) -> (u32, u32, Vec<u8>) {
+    let size = size.clamp(16, 256);
+    let mut pm = Pixmap::new(size, size).expect("tamaño del icono");
+    let (n, png) = BASES
+        .iter()
+        .find(|(n, _)| *n >= size)
+        .unwrap_or(&BASES[BASES.len() - 1]);
+    match Pixmap::decode_png(png) {
         Ok(base) => {
-            let (sx, sy) = (64.0 / base.width() as f32, 64.0 / base.height() as f32);
+            let s = size as f32 / *n as f32;
+            let (sx, sy) = (s, s);
             pm.draw_pixmap(
                 0,
                 0,
@@ -156,9 +192,9 @@ pub fn tray_icon_rgba(state: State) -> (u32, u32, Vec<u8>) {
         }
         Err(_) => pm.fill(Color::from_rgba8(NAVY.0, NAVY.1, NAVY.2, 255)),
     }
-    // punto de estado abajo a la derecha: anillo azul marino (40..63) y el color (44..59)
-    fill_circle(&mut pm, 52.0, 52.0, 12.0, NAVY);
-    fill_circle(&mut pm, 52.0, 52.0, 8.0, state_color(state));
+    let u = size as f32 / 16.0;
+    fill_circle(&mut pm, 13.0 * u, 13.0 * u, 3.0 * u, NAVY);
+    fill_circle(&mut pm, 13.0 * u, 13.0 * u, 2.0 * u, state_color(state));
     let rgba = pm
         .pixels()
         .iter()
@@ -167,7 +203,7 @@ pub fn tray_icon_rgba(state: State) -> (u32, u32, Vec<u8>) {
             [c.red(), c.green(), c.blue(), c.alpha()]
         })
         .collect();
-    (64, 64, rgba)
+    (size, size, rgba)
 }
 
 pub fn tray_tip(state: State, preparing_pct: Option<u8>) -> String {
@@ -179,7 +215,7 @@ pub fn tray_tip(state: State, preparing_pct: Option<u8>) -> String {
 
 /// HICON a partir del RGBA (color de 32 bits con alfa + máscara vacía).
 fn make_hicon(state: State) -> Result<HICON, String> {
-    let (w, h, rgba) = tray_icon_rgba(state);
+    let (w, h, rgba) = tray_icon_rgba(state, tray_size());
     // SAFETY: mapas de bits creados aquí y borrados tras crear el icono (que hace su copia).
     unsafe {
         let bmi = BITMAPINFO {
@@ -397,8 +433,15 @@ mod tests {
             (State::Recording, (255, 122, 122)),
             (State::Preparing, (90, 104, 131)),
         ] {
-            let (w, h, px) = tray_icon_rgba(state);
+            let (w, h, px) = tray_icon_rgba(state, 64);
             assert_eq!((w, h), (64, 64));
+            // la base es el icono de Anotalo: una de sus barras claras
+            let k = ((20 * w + 28) * 4) as usize;
+            assert_eq!(
+                (px[k], px[k + 1], px[k + 2], px[k + 3]),
+                (238, 243, 247, 255),
+                "{state:?}"
+            );
             let i = ((51 * w + 51) * 4) as usize;
             assert_eq!(
                 (px[i], px[i + 1], px[i + 2], px[i + 3]),
@@ -409,6 +452,43 @@ mod tests {
             let j = ((51 * w + 42) * 4) as usize;
             assert_eq!((px[j], px[j + 1], px[j + 2]), (22, 28, 43), "{state:?}");
         }
+    }
+
+    /// Se dibuja al tamaño de la bandeja (16 px a 100 %, 20 a 125 %, 24 a 150 %, 32 a 200 %), con el
+    /// punto del estado en el mismo sitio (centro a 13/16, anillo de 3/16 y punto de 2/16).
+    #[test]
+    fn test_icon_drawn_at_tray_size() {
+        for n in [16u32, 20, 24, 32, 40] {
+            let (w, h, px) = tray_icon_rgba(State::Recording, n);
+            assert_eq!((w, h), (n, n));
+            let c = (n * 13 / 16) as usize;
+            let i = (c * n as usize + c) * 4;
+            assert_eq!((px[i], px[i + 1], px[i + 2]), (255, 122, 122), "{n} px");
+        }
+    }
+
+    /// Para mirarlos: `cargo test -p anotalo --bin anotalo dump_tray_icons -- --ignored`
+    #[test]
+    #[ignore]
+    fn dump_tray_icons() {
+        let dir = std::env::temp_dir().join("anotalo-tray");
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in [16u32, 20, 24, 32] {
+            for (name, st) in [
+                ("idle", State::Idle),
+                ("armed", State::Armed),
+                ("recording", State::Recording),
+                ("preparing", State::Preparing),
+            ] {
+                let (w, h, rgba) = tray_icon_rgba(st, n);
+                let mut pm = Pixmap::new(w, h).unwrap();
+                for (d, s) in pm.pixels_mut().iter_mut().zip(rgba.as_chunks::<4>().0) {
+                    *d = tiny_skia::ColorU8::from_rgba(s[0], s[1], s[2], s[3]).premultiply();
+                }
+                pm.save_png(dir.join(format!("{n}-{name}.png"))).unwrap();
+            }
+        }
+        println!("{}", dir.display());
     }
 
     #[test]

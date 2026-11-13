@@ -15,8 +15,8 @@ html, body { overflow: hidden; }
 /* barra superior propia */
 .titlebar { app-region: drag; height: 40px; display: flex; align-items: center; background: var(--surface-sunken); border-bottom: 1px solid var(--line); user-select: none; position: relative; z-index: 5; }
 .tb-brand { display: flex; align-items: center; gap: 9px; padding: 0 14px; font-family: var(--font-display); font-weight: 600; font-size: 13px; letter-spacing: -0.01em; width: 216px; }
-.tb-brand .mark { width: 22px; height: 22px; border-radius: 7px; }
-.tb-brand .mark svg.i { width: 13px; height: 13px; }
+.tb-brand .brand-icon { width: 22px; height: 22px; border-radius: 6px; flex: none; }
+.tb-brand .wordmark .acc { color: var(--orbita); }
 .tb-mid { flex: 1; display: flex; justify-content: center; }
 .tb-status { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 12px; border-radius: var(--radius-pill); background: var(--surface); border: 1px solid var(--line); color: var(--ink-muted); font-size: 12px; white-space: nowrap; min-width: 232px; justify-content: center; }
 .tb-status #state-text { color: var(--ink); font-weight: 500; }

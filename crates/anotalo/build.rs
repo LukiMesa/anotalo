@@ -9,7 +9,7 @@ fn main() {
         return;
     }
     let version = std::env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION");
-    let icon = "../../calltx/ui/assets/icon.ico"; // hasta que llegue el icono de Anotalo (M3)
+    let icon = "assets/anotalo.ico";
     println!("cargo:rerun-if-changed={icon}");
     let mut res = winresource::WindowsResource::new();
     res.set_icon(icon)

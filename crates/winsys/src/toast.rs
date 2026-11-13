@@ -4,6 +4,7 @@
 //! necesita un servidor COM propio (un solo exe).
 
 use std::fmt::Write;
+use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use windows::Data::Xml::Dom::XmlDocument;
@@ -18,6 +19,43 @@ use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 use windows::core::{HSTRING, PCWSTR, w};
 
 pub const AUMID: &str = "Anotalo";
+
+/// El icono de los avisos de `aumid` (el valor `IconUri` de su clave): la ruta de un PNG.
+pub fn set_aumid_icon(aumid: &str, png: &Path) -> Result<(), String> {
+    let path = HSTRING::from(format!(r"Software\Classes\AppUserModelId\{aumid}"));
+    let value: Vec<u16> = png.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: clave de HKCU abierta y cerrada aquí; el valor es REG_SZ terminado en NUL.
+    unsafe {
+        let mut key = HKEY::default();
+        let rc = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(path.as_ptr()),
+            None,
+            None,
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            None,
+            &mut key,
+            None,
+        );
+        if rc != ERROR_SUCCESS {
+            return Err(format!(
+                "no se pudo registrar el icono de los avisos ({})",
+                rc.0
+            ));
+        }
+        let bytes = std::slice::from_raw_parts(value.as_ptr().cast::<u8>(), value.len() * 2);
+        let rc = RegSetValueExW(key, w!("IconUri"), None, REG_SZ, Some(bytes));
+        let _ = RegCloseKey(key);
+        if rc != ERROR_SUCCESS {
+            return Err(format!(
+                "no se pudo registrar el icono de los avisos ({})",
+                rc.0
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Registra el AppUserModelID con el nombre que se ve en los avisos.
 pub fn register_aumid(aumid: &str, display_name: &str) -> Result<(), String> {

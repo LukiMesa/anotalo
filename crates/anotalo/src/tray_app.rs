@@ -80,6 +80,8 @@ const MODEL_TICK_MS: u32 = 30_000;
 const TRAY_TIMER: usize = 2;
 const TRAY_RETRY_MS: u32 = 5_000;
 const TRAY_RETRIES: u32 = 12;
+/// El icono de los avisos.
+const TOAST_ICON: &[u8] = include_bytes!("../assets/anotalo-256.png");
 /// Al salir con "Salir", lo que se espera a que se vean los avisos pendientes.
 const TOASTS_WAIT: Duration = Duration::from_secs(3);
 /// Lo que un hilo de las órdenes espera a que el hilo principal cambie un atajo o mueva la
@@ -1010,6 +1012,14 @@ pub fn run() -> ExitCode {
         .and_then(|()| toast::set_process_aumid(toast::AUMID))
     {
         log::warn!("Los avisos pueden no verse: {e}");
+    }
+    // el icono de los avisos: un PNG en la carpeta de datos (el registro guarda su ruta)
+    let toast_icon = data.join("icono.png");
+    if let Err(e) = std::fs::write(&toast_icon, TOAST_ICON)
+        .map_err(|e| e.to_string())
+        .and_then(|()| toast::set_aumid_icon(toast::AUMID, &toast_icon))
+    {
+        log::warn!("Los avisos se verán sin el icono de Anotalo: {e}");
     }
     let toasts = Arc::new(Toasts::new());
     let notifier: Arc<dyn Notifier> = toasts.clone();
