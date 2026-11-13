@@ -38,6 +38,8 @@ pub enum TrayCommand {
     ToggleAuto = 3,
     OpenFolder = 4,
     Quit = 5,
+    /// "Instalar la versión X", mientras hay una actualización disponible.
+    InstallUpdate = 6,
 }
 
 impl TrayCommand {
@@ -48,6 +50,7 @@ impl TrayCommand {
             TrayCommand::ToggleAuto,
             TrayCommand::OpenFolder,
             TrayCommand::Quit,
+            TrayCommand::InstallUpdate,
         ]
         .into_iter()
         .find(|c| *c as i32 == id)
@@ -58,15 +61,15 @@ impl TrayCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuItem {
     pub cmd: Option<TrayCommand>,
-    pub text: &'static str,
+    pub text: String,
     pub visible: bool,
     pub checked: bool,
 }
 
-fn item(cmd: TrayCommand, text: &'static str) -> MenuItem {
+fn item(cmd: TrayCommand, text: impl Into<String>) -> MenuItem {
     MenuItem {
         cmd: Some(cmd),
-        text,
+        text: text.into(),
         visible: true,
         checked: false,
     }
@@ -74,14 +77,16 @@ fn item(cmd: TrayCommand, text: &'static str) -> MenuItem {
 
 const SEPARATOR: MenuItem = MenuItem {
     cmd: None,
-    text: "",
+    text: String::new(),
     visible: true,
     checked: false,
 };
 
-pub fn menu_items(state: State, auto_mode: bool) -> Vec<MenuItem> {
+/// El menú. `update`: la versión que se puede instalar (su entrada va encima del separador que
+/// precede a "Salir"; también mientras se graba: instalarla espera a que termine).
+pub fn menu_items(state: State, auto_mode: bool, update: Option<&str>) -> Vec<MenuItem> {
     let recording = state == State::Recording;
-    vec![
+    let mut items = vec![
         item(
             TrayCommand::ToggleNote,
             if recording {
@@ -100,9 +105,15 @@ pub fn menu_items(state: State, auto_mode: bool) -> Vec<MenuItem> {
         },
         SEPARATOR,
         item(TrayCommand::OpenFolder, "Abrir carpeta de grabaciones"),
-        SEPARATOR,
-        item(TrayCommand::Quit, "Salir"),
-    ]
+    ];
+    if let Some(v) = update {
+        items.push(item(
+            TrayCommand::InstallUpdate,
+            format!("Instalar la versión {v}"),
+        ));
+    }
+    items.extend([SEPARATOR, item(TrayCommand::Quit, "Salir")]);
+    items
 }
 
 /// Colores del tema: acero oscuro (inactivo), órbita (esperando), error (grabando), como Python.
@@ -328,7 +339,12 @@ impl Tray {
                         } else {
                             MF_STRING
                         };
-                        let _ = AppendMenuW(menu, flags, cmd as usize, &HSTRING::from(it.text));
+                        let _ = AppendMenuW(
+                            menu,
+                            flags,
+                            cmd as usize,
+                            &HSTRING::from(it.text.as_str()),
+                        );
                     }
                 }
             }
@@ -376,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_tray_has_record_call_item() {
-        let items = menu_items(State::Armed, true);
+        let items = menu_items(State::Armed, true, None);
         let item = find(&items, TrayCommand::RecordCall);
         assert_eq!(item.text, "Grabar llamada");
         assert!(item.visible);
@@ -384,27 +400,43 @@ mod tests {
 
     #[test]
     fn test_record_call_hidden_while_recording() {
-        let items = menu_items(State::Recording, true);
+        let items = menu_items(State::Recording, true, None);
         assert!(!find(&items, TrayCommand::RecordCall).visible);
         assert_eq!(
             find(&items, TrayCommand::ToggleNote).text,
             "Detener grabación"
         );
         assert_eq!(
-            find(&menu_items(State::Idle, false), TrayCommand::ToggleNote).text,
+            find(
+                &menu_items(State::Idle, false, None),
+                TrayCommand::ToggleNote
+            )
+            .text,
             "Nueva nota rápida"
         );
     }
 
     #[test]
     fn test_auto_item_checked() {
-        assert!(find(&menu_items(State::Armed, true), TrayCommand::ToggleAuto).checked);
-        assert!(!find(&menu_items(State::Idle, false), TrayCommand::ToggleAuto).checked);
+        assert!(
+            find(
+                &menu_items(State::Armed, true, None),
+                TrayCommand::ToggleAuto
+            )
+            .checked
+        );
+        assert!(
+            !find(
+                &menu_items(State::Idle, false, None),
+                TrayCommand::ToggleAuto
+            )
+            .checked
+        );
     }
 
     #[test]
     fn test_menu_order_and_separators() {
-        let items = menu_items(State::Idle, true);
+        let items = menu_items(State::Idle, true, None);
         let order: Vec<Option<TrayCommand>> = items.iter().map(|i| i.cmd).collect();
         assert_eq!(
             order,
@@ -422,6 +454,32 @@ mod tests {
         assert_eq!(
             find(&items, TrayCommand::OpenFolder).text,
             "Abrir carpeta de grabaciones"
+        );
+    }
+
+    #[test]
+    fn test_update_item_only_when_available() {
+        let has = |items: &[MenuItem]| items.iter().any(|i| i.text == "Instalar la versión 1.0.1");
+        assert!(has(&menu_items(State::Idle, true, Some("1.0.1"))));
+        assert!(has(&menu_items(State::Recording, true, Some("1.0.1"))));
+        assert!(
+            !menu_items(State::Idle, true, None)
+                .iter()
+                .any(|i| i.text.starts_with("Instalar"))
+        );
+        let items = menu_items(State::Idle, true, Some("1.0.1"));
+        let pos = items
+            .iter()
+            .position(|i| i.text == "Instalar la versión 1.0.1")
+            .unwrap();
+        assert_eq!(items.last().unwrap().text, "Salir");
+        assert!(pos < items.len() - 2);
+        // justo encima del separador que va antes de "Salir"
+        assert_eq!(items[pos + 1].cmd, None);
+        assert_eq!(items[pos].cmd, Some(TrayCommand::InstallUpdate));
+        assert_eq!(
+            TrayCommand::from_id(TrayCommand::InstallUpdate as i32),
+            Some(TrayCommand::InstallUpdate)
         );
     }
 

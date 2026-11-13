@@ -19,6 +19,7 @@ mod shell;
 mod tray_app;
 mod ui_bridge;
 mod ui_wiring;
+mod updates;
 mod voices_cli;
 
 use record::RecordArgs;

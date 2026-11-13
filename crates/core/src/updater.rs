@@ -413,7 +413,9 @@ pub struct UpdateDeps {
     pub notifier: Arc<dyn Notifier>,
     /// Cada cambio, con la foto nueva (`snapshot`).
     pub on_change: Box<dyn Fn(Value) + Send + Sync>,
-    /// true al empezar a instalar (no se pueden empezar grabaciones); false si la instalación falla.
+    /// true justo antes de la última comprobación de `is_recording` (desde ahí no se pueden empezar
+    /// grabaciones); false si había una (se espera) o si la instalación falla. Debe esperar a que
+    /// termine de empezar una grabación en curso (`App::set_updating` toma el turno de acciones).
     pub set_updating: Box<dyn Fn(bool) + Send + Sync>,
     pub fetch: FetchFn,
     pub download: DownloadFn,
@@ -630,12 +632,14 @@ impl UpdateManager {
         };
         {
             let _ops = self.ops();
-            // La descarga tarda: puede haber empezado otra grabación mientras tanto.
+            // La descarga tarda: puede haber empezado otra grabación mientras tanto. Primero se
+            // bloquean las grabaciones y luego se mira: así ninguna empieza entre medias.
+            (self.d.set_updating)(true);
             if (self.d.is_recording)() {
+                (self.d.set_updating)(false);
                 self.set(UpdateState::Waiting, None);
                 return;
             }
-            (self.d.set_updating)(true);
             self.set(UpdateState::Installing, None);
         }
         log::info!("Instalando la versión {}", rel.version);

@@ -508,6 +508,32 @@ fn test_no_new_recording_while_updating() {
     assert!(h.notes().iter().any(|n| n.0.contains("Actualizando")));
 }
 
+/// El actualizador marca "actualizando" y luego mira si se graba. Una grabación que ya pasó sus
+/// comprobaciones y espera su turno (otra se está guardando) no puede empezar después de eso: o
+/// empieza antes de que `set_updating` vuelva (y el actualizador la ve y espera), o no empieza.
+#[test]
+fn test_no_recording_starts_after_set_updating_returns() {
+    let h = h();
+    *h.stop_delay.lock().unwrap() = Duration::from_millis(500);
+    h.app.toggle(); // una nota
+    let app = h.app.clone();
+    let stopper = std::thread::spawn(move || app.toggle()); // la para (tarda, con el turno)
+    std::thread::sleep(Duration::from_millis(50));
+    let app = h.app.clone();
+    let caller = std::thread::spawn(move || app.on_call_start(teams())); // espera el turno
+    std::thread::sleep(Duration::from_millis(100));
+    h.app.set_updating(true);
+    let updating_since = Instant::now();
+    stopper.join().unwrap();
+    caller.join().unwrap();
+    for i in 1..h.count() {
+        assert!(
+            h.session(i).at < updating_since,
+            "la grabación {i} empezó con la app actualizándose"
+        );
+    }
+}
+
 #[test]
 fn test_mark_during_call_writes_and_emits() {
     let h = h();

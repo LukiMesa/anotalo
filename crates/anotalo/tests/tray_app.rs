@@ -167,6 +167,8 @@ fn quit_signal_saves_the_note_and_exits() {
     assert!(status.success(), "salió con {status}");
     assert!(saved_note(&out).is_some(), "la nota no se guardó");
     assert!(log_has(tmp.path(), "lo pide el instalador").is_some());
+    // la versión de desarrollo ni busca actualizaciones
+    assert!(log_has(tmp.path(), "Actualizaciones:").is_none());
 }
 
 /// El instalador pide salir a una app que acaba de lanzar, mientras aún crea su ventana: la espera

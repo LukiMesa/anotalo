@@ -407,6 +407,8 @@ struct Shared {
     notified: Mutex<Vec<String>>,
     updating: Mutex<Vec<bool>>,
     changes: AtomicUsize,
+    /// "grabando?" y "actualizando=…", en el orden en que se llamaron.
+    calls: Mutex<Vec<String>>,
 }
 
 struct Harness {
@@ -441,12 +443,18 @@ impl Harness {
         );
         let mgr = UpdateManager::new(UpdateDeps {
             current: "1.0.0".into(),
-            is_recording: Box::new(move || s1.recording.load(Ordering::SeqCst)),
+            is_recording: Box::new(move || {
+                s1.calls.lock().unwrap().push("grabando?".into());
+                s1.recording.load(Ordering::SeqCst)
+            }),
             notifier: notes.clone(),
             on_change: Box::new(move |_| {
                 s2.changes.fetch_add(1, Ordering::SeqCst);
             }),
-            set_updating: Box::new(move |on| s3.updating.lock().unwrap().push(on)),
+            set_updating: Box::new(move |on| {
+                s3.calls.lock().unwrap().push(format!("actualizando={on}"));
+                s3.updating.lock().unwrap().push(on);
+            }),
             fetch: Box::new(move || {
                 s4.fetches.fetch_add(1, Ordering::SeqCst);
                 if s4.fail_fetch.load(Ordering::SeqCst) {
@@ -495,6 +503,9 @@ impl Harness {
     }
     fn updating(&self) -> Vec<bool> {
         self.s.updating.lock().unwrap().clone()
+    }
+    fn calls(&self) -> Vec<String> {
+        self.s.calls.lock().unwrap().clone()
     }
     fn fetches(&self) -> usize {
         self.s.fetches.load(Ordering::SeqCst)
@@ -640,6 +651,34 @@ fn test_first_run_after_update_notifies_once() {
     assert_eq!(s.last_run_version, "0.6.1");
 }
 
+/// Primero se bloquean las grabaciones y luego se mira si hay una: así ninguna puede empezar entre
+/// la última comprobación y el instalador. Si la hay, se deshace y se espera.
+#[test]
+fn test_recordings_are_blocked_before_the_last_check() {
+    let h = Harness::new();
+    h.mgr.check(false);
+    h.mgr.install();
+    assert_eq!(h.mgr.state(), UpdateState::Installing);
+    let calls = h.calls();
+    assert_eq!(
+        calls[calls.len() - 2..],
+        ["actualizando=true", "grabando?"],
+        "{calls:?}"
+    );
+
+    let h = Harness::new();
+    h.s.record_on_download.store(true, Ordering::SeqCst);
+    h.mgr.check(false);
+    h.mgr.install();
+    assert_eq!(h.mgr.state(), UpdateState::Waiting);
+    let calls = h.calls();
+    assert_eq!(
+        calls[calls.len() - 3..],
+        ["actualizando=true", "grabando?", "actualizando=false"],
+        "{calls:?}"
+    );
+}
+
 #[test]
 fn test_recording_started_during_download_waits_and_reuses_file() {
     let h = Harness::new();
@@ -648,8 +687,9 @@ fn test_recording_started_during_download_waits_and_reuses_file() {
     h.mgr.install();
     assert_eq!(h.mgr.state(), UpdateState::Waiting);
     assert!(h.installed().is_empty());
-    assert!(
-        h.updating().is_empty(),
+    assert_eq!(
+        h.updating().last(),
+        Some(&false),
         "esperando no bloquea las grabaciones"
     );
     h.s.record_on_download.store(false, Ordering::SeqCst);

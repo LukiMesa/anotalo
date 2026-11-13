@@ -98,6 +98,10 @@ pub enum AppEvent {
         label: String,
         copied: bool,
     },
+    /// El estado de la actualización (`UpdateManager::snapshot`). `App` solo lo reenvía.
+    Update {
+        snapshot: Value,
+    },
 }
 
 pub type EventSink = Arc<dyn Fn(AppEvent) + Send + Sync>;
@@ -255,7 +259,10 @@ impl App {
         self.data().settings.clone()
     }
 
+    /// Con el turno de las acciones: una grabación que está empezando termina de empezar antes (y
+    /// quien actualiza la ve en `recording_active`), y ninguna empieza después (`can_begin`).
     pub fn set_updating(&self, on: bool) {
+        let _g = self.action.lock();
         self.data().updating = on;
     }
 
@@ -377,7 +384,7 @@ impl App {
 
     fn can_begin(&self) -> bool {
         let d = self.data();
-        d.session.is_none() && !d.stopping
+        d.session.is_none() && !d.stopping && !d.updating
     }
 
     pub fn set_auto(&self, on: bool) {

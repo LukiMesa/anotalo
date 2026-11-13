@@ -88,6 +88,17 @@ pub fn page_event(e: &AppEvent, ctx: &PageCtx) -> Option<Value> {
             Some(json!({"type": "recordings", "select": name}))
         }
         AppEvent::Level(_) | AppEvent::SessionStopping { .. } => None,
+        // `{"type": "update", **updater.snapshot()}`, como Python
+        AppEvent::Update { snapshot } => {
+            let mut v = json!({"type": "update"});
+            v.as_object_mut()?.extend(
+                snapshot
+                    .as_object()?
+                    .iter()
+                    .map(|(k, x)| (k.clone(), x.clone())),
+            );
+            Some(v)
+        }
     }
 }
 
@@ -389,6 +400,31 @@ mod tests {
                     label: "Teams".into()
                 },
                 &c
+            ),
+            None
+        );
+    }
+
+    /// Como Python: `{"type": "update", **updater.snapshot()}`.
+    #[test]
+    fn test_update_snapshot_maps_to_page_event() {
+        let snapshot = json!({"state": "available", "version": "1.0.1", "title": "Anotalo 1.0.1",
+                              "progress": null, "error": null, "current": "1.0.0"});
+        assert_eq!(
+            page_event(&AppEvent::Update { snapshot }, &ctx()),
+            Some(
+                json!({"type": "update", "state": "available", "version": "1.0.1",
+                        "title": "Anotalo 1.0.1", "progress": null, "error": null,
+                        "current": "1.0.0"})
+            )
+        );
+        // algo que no es un objeto no llega a la página
+        assert_eq!(
+            page_event(
+                &AppEvent::Update {
+                    snapshot: json!("x")
+                },
+                &ctx()
             ),
             None
         );

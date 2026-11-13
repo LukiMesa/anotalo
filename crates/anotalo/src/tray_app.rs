@@ -71,7 +71,10 @@ use crate::ui_wiring::{
     HotkeyPause, MainCalls, NO_WINDOW_TITLE, PageCtx, capture_hook, check_hotkey, device_label,
     no_window_body, page_event,
 };
+use crate::updates;
 use crate::voices_cli::prints_dir;
+use anotalo_core::updater::UpdateManager;
+use anotalo_setup::layout::Layout;
 
 /// Cada 30 s se mira si el modelo lleva tiempo sin usarse (para liberarlo).
 const MODEL_TIMER: usize = 1;
@@ -614,6 +617,10 @@ struct Shell {
     quitting: Cell<bool>,
     /// Ya se pidió el fin del bucle de mensajes (`post_quit`).
     quit_posted: Cell<bool>,
+    /// Solo en la versión instalada.
+    updater: Option<Arc<UpdateManager>>,
+    /// La versión que se puede instalar desde el menú (disponible, o falló al instalarla).
+    update_version: RefCell<Option<String>>,
     taskbar_created: u32,
     profile: Profile,
 }
@@ -640,6 +647,18 @@ impl Shell {
                     self.model.touch(Instant::now());
                     let p = self.profile;
                     in_background("borrar huellas", move || prune_prints(p));
+                    // una actualización que esperaba a que terminara la grabación
+                    if let Some(u) = self.updater.clone() {
+                        in_background("actualización", move || u.on_recording_end());
+                    }
+                }
+                AppEvent::Update { snapshot } => {
+                    let installable =
+                        matches!(snapshot["state"].as_str(), Some("available" | "error"));
+                    *self.update_version.borrow_mut() = snapshot["version"]
+                        .as_str()
+                        .filter(|_| installable)
+                        .map(str::to_string);
                 }
                 AppEvent::Line {
                     speaker, hms, text, ..
@@ -818,7 +837,12 @@ impl Shell {
     }
 
     fn menu(&self) {
-        let items = menu_items(self.app.state(), self.app.settings().auto_mode);
+        let update = self.update_version.borrow().clone();
+        let items = menu_items(
+            self.app.state(),
+            self.app.settings().auto_mode,
+            update.as_deref(),
+        );
         let cmd = self
             .tray
             .borrow()
@@ -841,6 +865,11 @@ impl Shell {
                 }
             }),
             TrayCommand::OpenFolder => open_folder(&app.settings().output_dir),
+            TrayCommand::InstallUpdate => {
+                if let Some(u) = self.updater.clone() {
+                    in_background("instalar actualización", move || u.install());
+                }
+            }
             TrayCommand::Quit if !self.quitting.replace(true) => {
                 log::info!("Cerrando Anotalo");
                 let hwnd = self.hwnd;
@@ -1034,7 +1063,7 @@ pub fn run() -> ExitCode {
         Err(e) => log::warn!("No se pudieron copiar los ajustes de Transcriptor: {e}"),
     }
     let cfg_path = config_path(profile);
-    let (settings, problem) = load_settings_checked(&cfg_path, profile);
+    let (mut settings, problem) = load_settings_checked(&cfg_path, profile);
     if let Err(e) = toast::register_aumid(toast::AUMID, "Anotalo")
         .and_then(|()| toast::set_process_aumid(toast::AUMID))
     {
@@ -1072,6 +1101,20 @@ pub fn run() -> ExitCode {
             "Uso los de por defecto y no guardaré cambios hasta reiniciar. Revisa app.log",
             None,
         ),
+    }
+    // la versión instalada: inicio con Windows, aviso tras actualizar y restos de actualizaciones
+    let layout = match profile {
+        Profile::Installed => Layout::current()
+            .inspect_err(|e| log::warn!("No se encontraron las carpetas del usuario: {e}"))
+            .ok(),
+        Profile::Dev => None,
+    };
+    let version = env!("CARGO_PKG_VERSION");
+    if updates::on_startup(profile, layout.as_ref(), &mut settings, version, &*notifier)
+        && can_save
+        && let Err(e) = save_settings(&settings, &cfg_path)
+    {
+        log::warn!("No se pudieron guardar los ajustes: {e}");
     }
 
     let missing = anotalo_whisper::missing_cpu_features();
@@ -1111,6 +1154,7 @@ pub fn run() -> ExitCode {
             window::post(hwnd_raw, WM_APP_EVENT, 0);
         }
     });
+    let update_events = events.clone();
     let app = App::new(
         settings.clone(),
         AppDeps {
@@ -1129,6 +1173,7 @@ pub fn run() -> ExitCode {
         },
     );
     let _ = r.cell.set(Arc::downgrade(&app));
+    let updater = updates::start_updater(profile, &app, update_events, notifier.clone(), &settings);
     {
         // "Liberar el modelo tras…" se aplica en vivo (para la ventana de ajustes)
         let m = model.clone();
@@ -1212,10 +1257,7 @@ pub fn run() -> ExitCode {
         "hotkey_mark",
         hotkey_applier(calls.clone(), r.clone(), HotkeyId::Mark),
     );
-    app.set_applier(
-        "autostart",
-        Box::new(|_| Err("Solo en la versión instalada".into())),
-    );
+    app.set_applier("autostart", updates::autostart_applier(profile, layout));
     app.set_applier(
         "output_dir",
         Box::new(|v| {
@@ -1276,6 +1318,8 @@ pub fn run() -> ExitCode {
         toasts,
         quitting: Cell::new(false),
         quit_posted: Cell::new(false),
+        updater,
+        update_version: RefCell::new(None),
         taskbar_created: window::taskbar_created(),
         profile,
     });
