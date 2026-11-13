@@ -444,6 +444,8 @@ fn test_large_folder_lists_fast() {
     let t = Instant::now();
     assert!(list_recordings(d.path(), "all", "inexistente", None).is_empty());
     let searched = t.elapsed();
-    assert!(listed < Duration::from_secs(1), "{listed:?}");
-    assert!(searched < Duration::from_secs(1), "{searched:?}");
+    // holgado: la prueba corre junto a otras compilaciones y en máquinas de CI lentas; lo que se
+    // vigila es que no se congele (antes de optimizar tardaba decenas de segundos)
+    assert!(listed < Duration::from_secs(3), "{listed:?}");
+    assert!(searched < Duration::from_secs(3), "{searched:?}");
 }

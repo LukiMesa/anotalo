@@ -164,7 +164,12 @@ fn test_acquire_after_release_starts_without_waiting() {
     );
     assert_eq!(r.model.status(), ModelStatus::Ready);
     assert!(t.wait_idle(Duration::from_secs(5)));
-    std::thread::sleep(Duration::from_millis(400));
+    // la recarga va en segundo plano: se espera a que ocurra (sin un plazo fijo que falle con la
+    // máquina ocupada)
+    let end = Instant::now() + Duration::from_secs(5);
+    while r.loads.load(Ordering::SeqCst) < 2 && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert_eq!(r.loads.load(Ordering::SeqCst), 2);
 }
 
