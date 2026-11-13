@@ -105,12 +105,14 @@ impl Env {
     /// accesos directos, sus ajustes y la caché de CUDA. Devuelve su carpeta.
     pub fn inno(&self) -> PathBuf {
         let dir = self.l.legacy_default_dir();
-        fs::create_dir_all(dir.join("_internal")).unwrap();
+        // como el de PyInstaller: los paquetes de Python traen su documentación en Markdown
+        fs::create_dir_all(dir.join("_internal").join("certifi")).unwrap();
         for (name, bytes) in [
             ("Transcriptor.exe", &b"MZ transcriptor"[..]),
             ("unins000.exe", b"MZ unins"),
             ("unins000.dat", b"dat"),
             (r"_internal\x.pyd", b"MZ pyd"),
+            (r"_internal\certifi\README.md", b"# certifi"),
             ("mis notas.txt", b"del usuario"),
         ] {
             fs::write(dir.join(name), bytes).unwrap();

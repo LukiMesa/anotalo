@@ -150,8 +150,10 @@ fn normalized(p: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Hay transcripciones (`.md`) o una papelera de Anotalo en algún sitio dentro de `dir`. Las
-/// carpetas de ajustes, modelos y cachés nunca las tienen.
+/// Hay transcripciones (`AAAA-MM-DD_HHMM_<App>.md`, como las nombran Anotalo y Transcriptor) o
+/// una papelera de Anotalo en algún sitio dentro de `dir`. Las carpetas de ajustes, modelos y
+/// cachés nunca las tienen (otros `.md`, como la documentación de los paquetes de Python que lleva
+/// `_internal`, no cuentan).
 fn holds_transcripts(dir: &Path) -> bool {
     let Ok(entries) = fs::read_dir(dir) else {
         return false;
@@ -161,10 +163,27 @@ fn holds_transcripts(dir: &Path) -> bool {
         let name = e.file_name().to_string_lossy().to_lowercase();
         match e.file_type() {
             Ok(t) if t.is_dir() => name == ".papelera" || holds_transcripts(&path),
-            Ok(_) => name.ends_with(".md"),
+            Ok(_) => is_transcript_name(&name),
             Err(_) => false,
         }
     })
+}
+
+/// `aaaa-mm-dd_hhmm_<algo>.md` (en minúsculas).
+fn is_transcript_name(name: &str) -> bool {
+    let b = name.as_bytes();
+    let digits =
+        |r: std::ops::Range<usize>| b.get(r).is_some_and(|s| s.iter().all(u8::is_ascii_digit));
+    name.ends_with(".md")
+        && b.len() > 19
+        && digits(0..4)
+        && b[4] == b'-'
+        && digits(5..7)
+        && b[7] == b'-'
+        && digits(8..10)
+        && b[10] == b'_'
+        && digits(11..15)
+        && b[15] == b'_'
 }
 
 /// Si Transcriptor arrancaba con Windows: su acceso directo de inicio; si no está, el `autostart`
