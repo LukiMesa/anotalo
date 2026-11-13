@@ -99,6 +99,7 @@ name = "anotalo-winsys"
 version = "1.0.0-alpha.1"
 dependencies = [
  "log",
+ "tempfile",
  "windows",
 ]
 

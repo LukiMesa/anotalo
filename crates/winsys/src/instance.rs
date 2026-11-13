@@ -1,11 +1,13 @@
 //! Instancia única: un mutex con nombre. La segunda instancia avisa a la primera (un evento con
-//! nombre) para que muestre su ventana, y termina.
+//! nombre) para que muestre su ventana, y termina. El instalador usa lo mismo para saber si la app
+//! está abierta (`is_held`) y para pedirle que se cierre (`signal` con el evento de salida).
 
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, WAIT_OBJECT_0,
 };
 use windows::Win32::System::Threading::{
-    CreateEventW, CreateMutexW, INFINITE, SetEvent, WaitForSingleObject,
+    CreateEventW, CreateMutexW, INFINITE, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE, SetEvent,
+    WaitForSingleObject,
 };
 use windows::core::HSTRING;
 
@@ -35,8 +37,23 @@ pub fn acquire(mutex: &str) -> Option<InstanceGuard> {
     }
 }
 
-/// Pide a la primera instancia que se muestre.
-pub fn signal_show(event: &str) {
+/// Si alguna instancia (de cualquier proceso de esta sesión) tiene el mutex.
+pub fn is_held(mutex: &str) -> bool {
+    // SAFETY: handle abierto y cerrado aquí.
+    unsafe {
+        match OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, &HSTRING::from(mutex)) {
+            Ok(h) => {
+                let _ = CloseHandle(h);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+/// Activa el evento con nombre: quien espere en `on_signal` lo recibe. Sin nadie esperando, no
+/// hace nada.
+pub fn signal(event: &str) {
     // SAFETY: handle abierto y cerrado aquí.
     unsafe {
         if let Ok(h) = CreateEventW(None, false, false, &HSTRING::from(event)) {
@@ -46,11 +63,11 @@ pub fn signal_show(event: &str) {
     }
 }
 
-/// Llama a `f` cada vez que otra instancia pide mostrarse (hilo propio, vive lo que la app).
-pub fn on_show(event: &str, f: Box<dyn Fn() + Send>) {
+/// Llama a `f` cada vez que llega el evento con nombre (hilo propio, vive lo que la app).
+pub fn on_signal(event: &str, f: Box<dyn Fn() + Send>) {
     let name = HSTRING::from(event);
     let _ = std::thread::Builder::new()
-        .name("mostrar".into())
+        .name(format!("señal {event}"))
         .spawn(move || {
             // SAFETY: el evento vive lo que este hilo.
             unsafe {
@@ -62,4 +79,14 @@ pub fn on_show(event: &str, f: Box<dyn Fn() + Send>) {
                 }
             }
         });
+}
+
+/// Pide a la primera instancia que se muestre.
+pub fn signal_show(event: &str) {
+    signal(event);
+}
+
+/// Llama a `f` cada vez que otra instancia pide mostrarse.
+pub fn on_show(event: &str, f: Box<dyn Fn() + Send>) {
+    on_signal(event, f);
 }
