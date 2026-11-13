@@ -319,3 +319,17 @@ fn test_igpu_check_needed_cases() {
     };
     assert_eq!(igpu_check_needed(&cpu, &igpu_only), None);
 }
+
+/// La ventana dice dónde corre el modelo: donde se cargó de verdad (el procesador si la GPU
+/// falló), y nada mientras no hay modelo cargado.
+#[test]
+fn test_placement_is_the_loaded_one() {
+    let r = rig(Duration::ZERO, false, 1, None);
+    assert_eq!(r.model.placement(), None);
+    r.model.prepare();
+    wait_for(&r.model, |s| matches!(s, ModelStatus::Ready));
+    assert_eq!(r.model.placement(), Some(Placement::Cpu));
+    r.model.tick(Instant::now() + Duration::from_secs(5));
+    assert_eq!(r.model.status(), ModelStatus::Released);
+    assert_eq!(r.model.placement(), None, "liberado");
+}

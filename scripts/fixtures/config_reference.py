@@ -40,6 +40,7 @@ anotalo = asdict(Settings(hotkey="<ctrl>+<alt>+t", detect_discord=True,
                           output_dir="C:\\Users\\José\\Documents\\Llamadas"))
 anotalo.update({"hotkey_mark": "<ctrl>+<alt>+m", "igpu_faster": None, "igpu_name": "",
                 "auto_update_check": True,
-                "claude_instruction": "Saca los acuerdos, tareas y pendientes de esta llamada y propón cómo ejecutarlos"})
+                "claude_instruction": "Saca los acuerdos, tareas y pendientes de esta llamada y propón cómo ejecutarlos",
+                "window_rect": None})
 (OUT / "config_anotalo.json").write_text(json.dumps(anotalo, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
 print("ok")

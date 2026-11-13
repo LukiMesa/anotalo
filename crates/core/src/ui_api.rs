@@ -134,7 +134,8 @@ fn dated(rec: &Recording) -> Option<NaiveDateTime> {
     rec.started_at.filter(|d| d.year() >= 1900)
 }
 
-fn kind_label(k: SessionKind) -> &'static str {
+/// El tipo de grabación como lo nombra la página.
+pub fn kind_label(k: SessionKind) -> &'static str {
     match k {
         SessionKind::Note => "note",
         SessionKind::Call => "call",
@@ -667,6 +668,12 @@ impl UiApi {
         self.capture.end();
         self.window.hide();
         ok()
+    }
+
+    /// La ventana se ocultó por cualquier vía (Alt+F4, la bandeja…): una captura de atajo a medias
+    /// termina y los atajos vuelven.
+    pub fn window_hidden(&self) {
+        self.capture.end();
     }
 
     pub fn choose_folder(&self) -> Value {

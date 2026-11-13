@@ -769,3 +769,16 @@ fn test_ui_api_is_shared_between_threads() {
     fn shared<T: Send + Sync>() {}
     shared::<UiApi>();
 }
+
+/// La ventana se oculta sin pasar por su botón de cerrar (Alt+F4, la bandeja): la captura de un
+/// atajo a medias termina igual y los atajos vuelven.
+#[test]
+fn test_hide_ends_hotkey_capture() {
+    let e = env();
+    e.api.begin_hotkey_capture();
+    e.api.window_hidden();
+    assert_eq!(e.captured(), [true, false]);
+    assert!(e.window.calls.lock().unwrap().is_empty(), "ya está oculta");
+    e.api.window_hidden();
+    assert_eq!(e.captured(), [true, false], "sin captura no hace nada");
+}

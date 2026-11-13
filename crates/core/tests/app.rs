@@ -661,3 +661,15 @@ fn test_concurrent_settings_last_save_has_both() {
         last.show_indicator
     );
 }
+
+/// La ventana sigue la grabación en curso por el nombre de su archivo.
+#[test]
+fn test_live_path_names_the_recording() {
+    let h = h();
+    assert_eq!(h.app.live_path(), None);
+    h.on_start(teams());
+    let live = h.app.live_path().expect("grabando");
+    assert_eq!(live.extension().and_then(|e| e.to_str()), Some("md"));
+    h.app.toggle();
+    assert_eq!(h.app.live_path(), None, "ya guardada");
+}

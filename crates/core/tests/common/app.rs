@@ -81,6 +81,9 @@ impl Recording for FakeSession {
         self.marks.fetch_add(1, Ordering::SeqCst);
         Some(75.0)
     }
+    fn path(&self) -> Option<PathBuf> {
+        Some(PathBuf::from(format!("{}.md", self.label)))
+    }
 }
 
 #[derive(Default)]

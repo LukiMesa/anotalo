@@ -315,6 +315,11 @@ impl ModelManager {
         self.changed(ModelStatus::Released);
     }
 
+    /// Dónde corre el modelo cargado; None sin modelo (preparándose, liberado o fallido).
+    pub fn placement(&self) -> Option<Placement> {
+        self.lock().current.as_ref().map(|t| t.placement())
+    }
+
     /// Cambió el modelo, el dispositivo o el idioma: se suelta y se prepara otra vez.
     pub fn reload(&self) {
         self.prepare();

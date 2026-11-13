@@ -48,6 +48,7 @@ macro_rules! with_settings_fields {
             igpu_name,
             auto_update_check,
             claude_instruction,
+            window_rect,
         )
     };
 }
@@ -99,6 +100,9 @@ pub struct Settings {
     pub auto_update_check: bool,
     /// La instrucción de "Copiar para Claude" (en blanco = `DEFAULT_CLAUDE_INSTRUCTION`).
     pub claude_instruction: String,
+    /// Dónde estaba la ventana al ocultarla: izquierda, arriba, derecha y abajo en píxeles físicos
+    /// (None = centrada la próxima vez).
+    pub window_rect: Option<[i32; 4]>,
     /// Claves desconocidas: se conservan.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -139,6 +143,7 @@ impl Settings {
             igpu_name: String::new(),
             auto_update_check: true,
             claude_instruction: DEFAULT_CLAUDE_INSTRUCTION.into(),
+            window_rect: None,
             extra: Map::new(),
         }
     }

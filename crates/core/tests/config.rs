@@ -454,3 +454,29 @@ fn test_concurrent_saves_do_not_collide() {
     assert!((100..108).contains(&s.silence_ms), "{}", s.silence_ms);
     assert!(!d.path().join("config.json.tmp").exists());
 }
+
+/// Dónde estaba la ventana (píxeles físicos: izquierda, arriba, derecha, abajo). Un valor que no
+/// son cuatro enteros cuenta como "sin guardar": la ventana se abre centrada.
+#[test]
+fn test_window_rect_setting_roundtrip() {
+    assert_eq!(defaults().window_rect, None);
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("config.json");
+    let s = Settings {
+        window_rect: Some([-1910, 10, -790, 730]),
+        ..defaults()
+    };
+    save_settings(&s, &p).unwrap();
+    assert_eq!(
+        load_settings(&p, Profile::Dev).window_rect,
+        Some([-1910, 10, -790, 730])
+    );
+    for bad in [
+        r#"{"window_rect": [1, 2, 3]}"#,
+        r#"{"window_rect": "x"}"#,
+        r#"{"window_rect": [1.5, 2, 3, 4]}"#,
+    ] {
+        std::fs::write(&p, bad).unwrap();
+        assert_eq!(load_settings(&p, Profile::Dev).window_rect, None, "{bad}");
+    }
+}

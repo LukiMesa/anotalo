@@ -60,6 +60,10 @@ pub trait Recording: Send {
     fn stop(self: Box<Self>, hurry: &Hurry) -> io::Result<(PathBuf, String)>;
     /// Marca en este momento; el segundo de la grabación, o None si no se pudo.
     fn mark(&self) -> Option<f64>;
+    /// El archivo de la transcripción (la ventana sigue la grabación por su nombre).
+    fn path(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -234,6 +238,11 @@ impl App {
 
     pub fn session_kind(&self) -> Option<SessionKind> {
         self.data().kind
+    }
+
+    /// El archivo de la grabación en curso, si hay una.
+    pub fn live_path(&self) -> Option<PathBuf> {
+        self.data().session.as_ref().and_then(|s| s.path())
     }
 
     /// Grabando o terminando de guardar la última grabación (no cerrar la app).
