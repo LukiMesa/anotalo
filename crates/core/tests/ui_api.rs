@@ -332,6 +332,26 @@ fn test_delete_live_recording_refused() {
     assert!(e.folder().join(TEAMS).exists());
 }
 
+/// Al colgar, la app aún escribe el archivo un rato y ya no es la grabación en curso: borrarlo
+/// entonces lo traería de vuelta al terminar de guardarlo.
+#[cfg(windows)]
+#[test]
+fn test_delete_refused_while_the_recording_is_being_saved() {
+    let e = env();
+    let p = e.folder().join(TEAMS);
+    let writer = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+    let res = e.api.delete(TEAMS);
+    assert_eq!(res["ok"], false, "{res}");
+    assert_eq!(
+        res["error"],
+        "No se puede borrar mientras se está guardando la grabación"
+    );
+    assert!(p.exists());
+    drop(writer);
+    assert_eq!(e.api.delete(TEAMS)["ok"], true, "ya guardada, sí");
+    assert!(!p.exists());
+}
+
 #[test]
 fn test_set_hotkey_invalid_returns_error() {
     let e = env();

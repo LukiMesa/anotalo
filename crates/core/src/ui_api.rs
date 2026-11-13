@@ -18,7 +18,9 @@ use crate::library::{Kind, Recording, Trash, fold, list_recordings, parse_record
 use crate::meta::{set_client, validate_client};
 use crate::paths::{Profile, profile};
 use crate::speaker::memory::VoiceStore;
-use crate::speaker::naming::{forget_in_call_prints, is_reserved, name_in_call, validate_name};
+use crate::speaker::naming::{
+    being_recorded, forget_in_call_prints, is_reserved, name_in_call, validate_name,
+};
 use crate::updater::UpdateManager;
 
 const MONTHS: [&str; 12] = [
@@ -472,6 +474,11 @@ impl UiApi {
         };
         if self.is_live(id) {
             return err("No se puede borrar mientras se está grabando");
+        }
+        // al colgar ya no es la grabación en curso, pero la app aún la está escribiendo: borrada
+        // ahora, volvería al terminar de guardarse
+        if being_recorded(&p) {
+            return err("No se puede borrar mientras se está guardando la grabación");
         }
         match Trash::new(&self.folder()).delete(&p) {
             Ok(token) => json!({"ok": true, "token": token}),
