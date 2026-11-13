@@ -244,16 +244,28 @@ fn system_dpi() -> u32 {
     unsafe { GetDpiForSystem() }
 }
 
-/// Tamaños mínimo y máximo al arrastrar: el mínimo de la principal, o el fijo (mínimo = máximo)
-/// de una ventana que no cambia de tamaño. `fixed` en píxeles a 96 ppp.
-fn track_sizes(fixed: Option<(i32, i32)>, dpi: u32) -> (POINT, Option<POINT>) {
-    let point = |(w, h): (i32, i32)| POINT {
-        x: scaled(w, dpi),
-        y: scaled(h, dpi),
-    };
+/// Tamaños mínimo y máximo al arrastrar: el mínimo de la principal (sin pasar de `work`, el área
+/// de trabajo de su monitor), o el fijo (mínimo = máximo) de una ventana que no cambia de tamaño.
+/// `fixed` en píxeles a 96 ppp.
+fn track_sizes(fixed: Option<(i32, i32)>, dpi: u32, work: Option<RECT>) -> (POINT, Option<POINT>) {
+    let point = |(x, y): (i32, i32)| POINT { x, y };
+    let size = |(w, h): (i32, i32)| (scaled(w, dpi), scaled(h, dpi));
     match fixed {
-        Some(size) => (point(size), Some(point(size))),
-        None => (point(MIN_SIZE), None),
+        Some(s) => (point(size(s)), Some(point(size(s)))),
+        None => (point(frame::min_track_size(size(MIN_SIZE), work)), None),
+    }
+}
+
+/// El área de trabajo del monitor de la ventana (None si Windows no la da).
+fn work_area_of(hwnd: HWND) -> Option<RECT> {
+    let mut mi = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `mi` con su tamaño; sin más punteros.
+    unsafe {
+        let m = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        GetMonitorInfoW(m, &mut mi).as_bool().then_some(mi.rcWork)
     }
 }
 
@@ -809,7 +821,7 @@ unsafe fn handle(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT
         WM_GETMINMAXINFO => {
             // SAFETY: lParam es un MINMAXINFO.
             let info = unsafe { &mut *(lp.0 as *mut MINMAXINFO) };
-            let (min, max) = track_sizes(fixed_size(hwnd), dpi_of(hwnd));
+            let (min, max) = track_sizes(fixed_size(hwnd), dpi_of(hwnd), work_area_of(hwnd));
             info.ptMinTrackSize = min;
             if let Some(max) = max {
                 info.ptMaxTrackSize = max;
@@ -904,10 +916,25 @@ mod tests {
     #[test]
     fn test_fixed_windows_cannot_change_size() {
         // la principal: solo un mínimo
-        let (min, max) = track_sizes(None, 96);
+        let big = RECT {
+            left: 0,
+            top: 0,
+            right: 2560,
+            bottom: 1400,
+        };
+        let (min, max) = track_sizes(None, 96, Some(big));
         assert_eq!((min.x, min.y, max), (940, 600, None));
+        // un portátil pequeño al 150 %: el mínimo no pasa del área de trabajo
+        let small = RECT {
+            left: 0,
+            top: 0,
+            right: 1366,
+            bottom: 720,
+        };
+        let (min, max) = track_sizes(None, 144, Some(small));
+        assert_eq!((min.x, min.y, max), (1366, 720, None));
         // la del instalador: mínimo = máximo, a la escala del monitor
-        let (min, max) = track_sizes(Some((460, 440)), 144);
+        let (min, max) = track_sizes(Some((460, 440)), 144, Some(big));
         assert_eq!((min.x, min.y), (690, 660));
         assert_eq!(max.map(|p| (p.x, p.y)), Some((690, 660)));
         assert!(serve("anotalo://localhost/setup.html").status() == 200);

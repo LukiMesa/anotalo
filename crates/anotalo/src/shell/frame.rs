@@ -131,6 +131,18 @@ pub fn restore_rect(
     }
 }
 
+/// El tamaño mínimo al arrastrar (`min`, ya a la escala del monitor), nunca más grande que
+/// `work`, el área de trabajo del monitor de la ventana: en un portátil pequeño al 150 % el mínimo
+/// no cabe y Windows dejaría la ventana debajo de la barra de tareas. Sin área (o una vacía), `min`.
+pub fn min_track_size(min: (i32, i32), work: Option<RECT>) -> (i32, i32) {
+    match work {
+        Some(a) if a.right > a.left && a.bottom > a.top => {
+            (min.0.min(a.right - a.left), min.1.min(a.bottom - a.top))
+        }
+        _ => min,
+    }
+}
+
 /// Píxeles que comparten dos rectángulos.
 fn overlap(a: &RECT, b: &RECT) -> i64 {
     let w = i64::from(a.right.min(b.right) - a.left.max(b.left));
@@ -228,6 +240,30 @@ mod tests {
         for (x, y) in [(2, 300), (3, 3), (997, 697), (500, 1), (500, 300)] {
             assert_eq!(hit_test(x, y, w, h, b, true), HTCLIENT);
         }
+    }
+
+    #[test]
+    fn test_min_track_size_fits_the_work_area() {
+        // 940×600 al 150 %: 1410×900
+        let min = (1410, 900);
+        // un monitor grande: el mínimo tal cual
+        assert_eq!(min_track_size(min, Some(rect(0, 0, 2560, 1400))), min);
+        // un portátil pequeño al 150 % (1366×768, la barra de tareas abajo): nunca más que el
+        // área de trabajo, o Windows la dejaría debajo de la barra
+        assert_eq!(
+            min_track_size(min, Some(rect(0, 0, 1366, 720))),
+            (1366, 720)
+        );
+        // solo falta altura; el área no empieza en 0 (otro monitor, la barra arriba)
+        assert_eq!(
+            min_track_size(min, Some(rect(1920, 48, 3840, 768))),
+            (1410, 720)
+        );
+        // sin saber el monitor: el mínimo tal cual
+        assert_eq!(min_track_size(min, None), min);
+        // un área vacía o imposible no deja un mínimo de 0 ni negativo
+        assert_eq!(min_track_size(min, Some(rect(0, 0, 0, 0))), min);
+        assert_eq!(min_track_size(min, Some(rect(10, 10, 5, 5))), min);
     }
 
     #[test]
