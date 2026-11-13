@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "anotalo"
-version = "1.0.0-alpha.3"
+version = "1.0.0-alpha.4"
 dependencies = [
  "anotalo-core",
  "anotalo-setup",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "anotalo-core"
-version = "1.0.0-alpha.3"
+version = "1.0.0-alpha.4"
 dependencies = [
  "anotalo-whisper",
  "audioadapter-buffers",
@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "anotalo-setup"
-version = "1.0.0-alpha.3"
+version = "1.0.0-alpha.4"
 dependencies = [
  "anotalo-core",
  "anotalo-winsys",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "anotalo-whisper"
-version = "1.0.0-alpha.3"
+version = "1.0.0-alpha.4"
 dependencies = [
  "cc",
  "cmake",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "anotalo-winaudio"
-version = "1.0.0-alpha.3"
+version = "1.0.0-alpha.4"
 dependencies = [
  "anotalo-core",
  "log",
@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "anotalo-winsys"
-version = "1.0.0-alpha.3"
+version = "1.0.0-alpha.4"
 dependencies = [
  "log",
  "tempfile",

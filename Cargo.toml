@@ -3,7 +3,7 @@ members = ["crates/anotalo", "crates/core", "crates/setup", "crates/whisper", "c
 resolver = "3"
 
 [workspace.package]
-version = "1.0.0-alpha.3"
+version = "1.0.0-alpha.4"
 edition = "2024"
 license = "MIT"
 
