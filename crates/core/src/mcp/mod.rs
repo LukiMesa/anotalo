@@ -2,3 +2,4 @@
 //! Es de solo lectura: nunca borra, edita ni graba, y no deja ningún archivo.
 
 pub mod server;
+pub mod tools;
