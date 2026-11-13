@@ -13,6 +13,7 @@ anotalo-core = { path = "../core" }
 anotalo-whisper = { path = "../whisper" }
 anotalo-winaudio = { path = "../winaudio" }
 anotalo-winsys = { path = "../winsys" }
+chrono = "0.4"
 fontdue = "0.9"
 hound = "3"
 log = "0.4"

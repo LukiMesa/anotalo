@@ -21,6 +21,14 @@ pub const CLASS: PCWSTR = w!("AnotaloMessageWindow");
 pub const WM_APP_EVENT: u32 = WM_APP + 2;
 /// La app terminó de cerrarse (tras "Salir").
 pub const WM_APP_QUIT_DONE: u32 = WM_APP + 3;
+/// Hay respuestas para la página.
+pub const WM_APP_UI: u32 = WM_APP + 4;
+/// Hay algo que hacer en el hilo principal (`MainCalls`).
+pub const WM_APP_CALL: u32 = WM_APP + 5;
+/// Otra Anotalo pidió mostrar la ventana.
+pub const WM_APP_SHOW: u32 = WM_APP + 6;
+/// La ventana principal cambió (wParam: 0 se ocultó, 1 maximizada, 2 restaurada).
+pub const WM_APP_WINDOW: u32 = WM_APP + 7;
 
 /// Quien atiende los mensajes. `None`: lo que Windows haga por defecto.
 pub trait Handler {

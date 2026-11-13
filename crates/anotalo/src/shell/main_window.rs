@@ -12,7 +12,7 @@
 //! sea: las coordenadas que entran y salen (`create`, `rect`, `work_areas`) son píxeles físicos.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroIsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -43,12 +43,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GWLP_USERDATA, GetClientRect, GetSystemMetrics, GetWindowLongPtrW, GetWindowPlacement,
     GetWindowRect, HICON, HTCLIENT, IDC_ARROW, IMAGE_ICON, IsIconic, IsWindowVisible, IsZoomed,
     LR_DEFAULTSIZE, LoadCursorW, LoadImageW, MINMAXINFO, MONITORINFOF_PRIMARY, NCCALCSIZE_PARAMS,
-    RegisterClassExW, SIZE_MINIMIZED, SM_CXSMICON, SM_CYSMICON, STYLESTRUCT, SW_HIDE, SW_MAXIMIZE,
-    SW_MINIMIZE, SW_RESTORE, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SYSTEM_METRICS_INDEX, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, WINDOW_EX_STYLE, WINDOWPLACEMENT, WM_CLOSE, WM_DPICHANGED, WM_GETMINMAXINFO,
-    WM_MOVE, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WM_SETFOCUS, WM_SIZE, WM_STYLECHANGING,
-    WNDCLASSEXW, WS_CLIPCHILDREN, WS_OVERLAPPEDWINDOW,
+    RegisterClassExW, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SM_CXSMICON, SM_CYSMICON,
+    STYLESTRUCT, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SYSTEM_METRICS_INDEX,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
+    WINDOWPLACEMENT, WM_CLOSE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE,
+    WM_NCDESTROY, WM_NCHITTEST, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGING, WNDCLASSEXW,
+    WS_CLIPCHILDREN, WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{BOOL, Interface, PCWSTR, w};
 use wry::dpi::{PhysicalPosition, PhysicalSize};
@@ -232,10 +233,35 @@ pub fn initial_rect(saved: Option<RECT>) -> RECT {
     frame::restore_rect(saved, &areas, size(DEFAULT_SIZE), size(MIN_SIZE))
 }
 
+/// Lo que cambia en la ventana y le interesa a la app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowChange {
+    /// Se ocultó (su botón de cerrar, Alt+F4, `hide`).
+    Hidden,
+    /// Se maximizó (true) o volvió a su tamaño (false), por el botón, Snap o un doble clic.
+    Maximized(bool),
+}
+
+/// Quien se entera de los cambios. Se llama dentro del procedimiento de la ventana: que solo
+/// anote o publique un mensaje.
+pub type Listener = Box<dyn Fn(WindowChange)>;
+
 /// Lo que el procedimiento de la ventana necesita. Vive en el montón y su dirección va en
 /// `GWLP_USERDATA` mientras exista la ventana.
 struct Shared {
     webview: RefCell<Option<WebView>>,
+    listener: RefCell<Option<Listener>>,
+    maximized: Cell<bool>,
+}
+
+impl Shared {
+    fn tell(&self, change: WindowChange) {
+        if let Ok(l) = self.listener.try_borrow()
+            && let Some(l) = l.as_ref()
+        {
+            l(change);
+        }
+    }
 }
 
 /// La ventana principal. Solo del hilo que la crea (el principal), que debe mover sus mensajes.
@@ -270,6 +296,8 @@ impl MainWindow {
             hwnd,
             shared: Box::new(Shared {
                 webview: RefCell::new(None),
+                listener: RefCell::new(None),
+                maximized: Cell::new(false),
             }),
         };
         // SAFETY: `shared` vive en el montón hasta Drop, que antes la quita de la ventana.
@@ -298,6 +326,11 @@ impl MainWindow {
             window.show();
         }
         Ok(window)
+    }
+
+    /// Quién se entera de que se oculta o se maximiza.
+    pub fn set_listener(&self, listener: Listener) {
+        *self.shared.listener.borrow_mut() = Some(listener);
     }
 
     /// La muestra (restaurada si estaba minimizada) y la trae al frente.
@@ -338,6 +371,7 @@ impl MainWindow {
         unsafe { IsZoomed(self.hwnd) }.as_bool()
     }
 
+    #[allow(dead_code)] // los tests de la ventana
     pub fn is_visible(&self) -> bool {
         // SAFETY: sin punteros.
         unsafe { IsWindowVisible(self.hwnd) }.as_bool()
@@ -672,8 +706,28 @@ unsafe fn handle(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT
             Some(LRESULT(0))
         }
         WM_SIZE => {
-            if wp.0 as u32 != SIZE_MINIMIZED {
+            let kind = wp.0 as u32;
+            if kind != SIZE_MINIMIZED {
                 fit_webview(hwnd);
+            }
+            if let Some(s) = shared(hwnd) {
+                let maximized = match kind {
+                    SIZE_MAXIMIZED => Some(true),
+                    SIZE_RESTORED => Some(false),
+                    _ => None, // minimizar no cambia lo que muestra el botón
+                };
+                if let Some(m) = maximized
+                    && s.maximized.replace(m) != m
+                {
+                    s.tell(WindowChange::Maximized(m));
+                }
+            }
+            None
+        }
+        // wParam FALSE: se oculta; lParam 0: por ShowWindow (no por minimizar la ventana dueña)
+        WM_SHOWWINDOW if wp.0 == 0 && lp.0 == 0 => {
+            if let Some(s) = shared(hwnd) {
+                s.tell(WindowChange::Hidden);
             }
             None
         }

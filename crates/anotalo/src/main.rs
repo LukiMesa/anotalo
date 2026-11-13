@@ -8,11 +8,12 @@ use anotalo_core::models::CATALOG;
 use anotalo_core::routing::PLATFORMS;
 use anotalo_whisper::{DeviceKind, LoadOptions, Model, Params, devices};
 
+mod diagnostics;
 mod record;
 mod shell;
 mod tray_app;
-#[allow(dead_code)] // M3: la tarea 8 la une a la ventana principal
 mod ui_bridge;
+mod ui_wiring;
 mod voices_cli;
 
 use record::RecordArgs;

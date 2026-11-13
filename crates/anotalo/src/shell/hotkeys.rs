@@ -20,6 +20,8 @@ pub struct Hotkeys {
     hwnd: HWND,
     /// id → (atajo, modificadores, tecla)
     specs: HashMap<HotkeyId, (String, u32, u32)>,
+    /// Soltados mientras la ventana captura uno nuevo (`pause`).
+    paused: bool,
 }
 
 impl Hotkeys {
@@ -27,6 +29,7 @@ impl Hotkeys {
         Hotkeys {
             hwnd,
             specs: HashMap::new(),
+            paused: false,
         }
     }
 
@@ -47,17 +50,23 @@ impl Hotkeys {
         }
     }
 
-    /// Cambia un atajo en vivo. Si el nuevo no se puede registrar, se queda el anterior.
-    #[allow(dead_code)] // M3: la ventana de ajustes cambia los atajos
+    /// Cambia un atajo en vivo. Si el nuevo no se puede registrar, se queda el anterior. En pausa
+    /// (la ventana cambia el atajo mientras lo captura) solo se comprueba que esté libre: se
+    /// registra al volver con `resume`.
     pub fn rebind(&mut self, id: HotkeyId, spec: &str) -> Result<(), String> {
         let (mods, vk) = validate_hotkey(spec)?;
         let old = self.specs.get(&id).cloned();
         self.unregister(id);
         if self.try_register(id, mods, vk) {
             self.specs.insert(id, (spec.to_string(), mods, vk));
+            if self.paused {
+                self.unregister(id);
+            }
             return Ok(());
         }
-        if let Some((_, m, v)) = old {
+        if let Some((_, m, v)) = old
+            && !self.paused
+        {
             self.try_register(id, m, v);
         }
         Err("Esa combinación ya la usa otra aplicación".into())
@@ -65,6 +74,7 @@ impl Hotkeys {
 
     /// Suelta todos los atajos (p. ej. mientras la ventana captura uno nuevo).
     pub fn pause(&mut self) {
+        self.paused = true;
         let ids: Vec<HotkeyId> = self.specs.keys().copied().collect();
         for id in ids {
             self.unregister(id);
@@ -72,8 +82,10 @@ impl Hotkeys {
     }
 
     /// Vuelve a registrar los atajos soltados con `pause`.
-    #[allow(dead_code)] // M3: la ventana de ajustes cambia los atajos
     pub fn resume(&mut self) {
+        if !std::mem::replace(&mut self.paused, false) {
+            return;
+        }
         let all: Vec<(HotkeyId, u32, u32)> = self
             .specs
             .iter()
@@ -221,6 +233,28 @@ mod tests {
         assert!(free_elsewhere(spec), "liberado durante la captura");
         hk.resume();
         assert!(!free_elsewhere(spec), "vuelve a estar registrado");
+        drop(hk);
+        // SAFETY: la ventana es de este hilo.
+        unsafe { DestroyWindow(hwnd).unwrap() };
+    }
+
+    /// La ventana cambia el atajo mientras lo captura (con los atajos en pausa): el nuevo no se
+    /// activa hasta que la captura termina.
+    #[test]
+    #[ignore]
+    fn test_rebind_while_paused_waits_for_resume() {
+        let (old, new) = ("<ctrl>+<alt>+<f7>", "<ctrl>+<alt>+<f6>");
+        let hwnd = message_window();
+        let mut hk = Hotkeys::new(hwnd);
+        hk.register(HotkeyId::Record, old).unwrap();
+        hk.pause();
+        hk.rebind(HotkeyId::Record, new).unwrap();
+        assert!(free_elsewhere(new), "sigue en pausa");
+        assert!(free_elsewhere(old));
+        hk.resume();
+        assert!(!free_elsewhere(new), "el nuevo, al volver");
+        assert!(free_elsewhere(old), "el anterior ya no");
+        hk.resume(); // sin pausa no hace nada
         drop(hk);
         // SAFETY: la ventana es de este hilo.
         unsafe { DestroyWindow(hwnd).unwrap() };

@@ -1,6 +1,6 @@
-//! La app de la bandeja de punta a punta: una nota con el atajo y salir desde el menú.
-//! Necesita escritorio, micrófono y el modelo:
-//! `cargo test --release -p anotalo --test tray_app -- --ignored`
+//! La app de la bandeja de punta a punta: una nota con el atajo, la ventana principal y salir
+//! desde el menú. Necesita escritorio, micrófono, WebView2 y el modelo:
+//! `cargo test --release -p anotalo --test tray_app -- --ignored --test-threads=1`
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Shutdown::ShutdownBlockReasonQuery;
 use windows::Win32::UI::WindowsAndMessaging::{
-    ENDSESSION_CLOSEAPP, ENDSESSION_CRITICAL, FindWindowW, PostMessageW, SendMessageW, WM_COMMAND,
-    WM_ENDSESSION, WM_HOTKEY, WM_QUERYENDSESSION,
+    ENDSESSION_CLOSEAPP, ENDSESSION_CRITICAL, FindWindowW, IsWindowVisible, PostMessageW,
+    SendMessageW, WM_APP, WM_CLOSE, WM_COMMAND, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONUP,
+    WM_QUERYENDSESSION,
 };
 use windows::core::w;
 
@@ -40,8 +41,33 @@ fn wait_for<T>(what: &str, timeout: Duration, mut f: impl FnMut() -> Option<T>) 
 }
 
 fn post(hwnd: HWND, msg: u32, wp: usize) {
+    post_lp(hwnd, msg, wp, 0);
+}
+
+fn post_lp(hwnd: HWND, msg: u32, wp: usize, lp: isize) {
     // SAFETY: mensaje sin punteros a una ventana de otro proceso.
-    unsafe { PostMessageW(Some(hwnd), msg, WPARAM(wp), LPARAM(0)) }.expect("PostMessageW");
+    unsafe { PostMessageW(Some(hwnd), msg, WPARAM(wp), LPARAM(lp)) }.expect("PostMessageW");
+}
+
+/// El clic izquierdo en el icono de la bandeja (`WM_APP_TRAY`).
+fn tray_click(hwnd: HWND) {
+    post_lp(hwnd, WM_APP + 1, 0, WM_LBUTTONUP as isize);
+}
+
+fn log_has(tmp: &Path, what: &str) -> Option<String> {
+    std::fs::read_to_string(app_log(tmp))
+        .ok()
+        .filter(|l| l.contains(what))
+}
+
+fn main_window() -> Option<HWND> {
+    // SAFETY: busca una ventana por su clase.
+    unsafe { FindWindowW(w!("AnotaloMainWindow"), None) }.ok()
+}
+
+fn visible(hwnd: HWND) -> bool {
+    // SAFETY: sin punteros.
+    unsafe { IsWindowVisible(hwnd) }.as_bool()
 }
 
 fn saved_note(out: &Path) -> Option<PathBuf> {
@@ -59,8 +85,13 @@ fn app_log(tmp: &Path) -> PathBuf {
     tmp.join("appdata").join("Anotalo-dev").join("app.log")
 }
 
-/// Arranca la app (perfil dev, carpetas temporales) y espera a que el modelo esté listo.
+/// Arranca la app (perfil dev, carpetas temporales, `--minimized`: la ventana no le quita el foco a
+/// quien ejecuta los tests) y espera a que el modelo esté listo.
 fn launch(tmp: &Path) -> (Kill, PathBuf, HWND) {
+    launch_with(tmp, &[])
+}
+
+fn launch_with(tmp: &Path, env: &[(&str, &str)]) -> (Kill, PathBuf, HWND) {
     let appdata = tmp.join("appdata");
     let out = tmp.join("out");
     let data = appdata.join("Anotalo-dev");
@@ -71,8 +102,10 @@ fn launch(tmp: &Path) -> (Kill, PathBuf, HWND) {
 
     let mut app = Kill(
         Command::new(env!("CARGO_BIN_EXE_anotalo"))
+            .arg("--minimized")
             .env("ANOTALO_PROFILE", "dev")
             .env("APPDATA", &appdata)
+            .envs(env.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -205,6 +238,86 @@ fn tray_app_cancelled_shutdown_clears_the_block_reason() {
     wait_for("la nota guardada", Duration::from_secs(120), || {
         saved_note(&out)
     });
+    post(hwnd, WM_COMMAND, 5); // "Salir"
+    let status = wait_for("que la app se cierre", EXIT_WAIT, || {
+        app.0.try_wait().unwrap()
+    });
+    assert!(status.success(), "salió con {status}");
+}
+
+/// La ventana principal: empieza oculta con `--minimized`, el clic en el icono la muestra con la
+/// página cargada, cerrarla solo la oculta (y guarda dónde estaba) y "Salir" cierra la app.
+#[test]
+#[ignore]
+fn tray_app_window_shows_and_lists() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut app, _out, hwnd) = launch(tmp.path());
+    wait_for("la ventana creada", Duration::from_secs(20), || {
+        log_has(tmp.path(), "Ventana principal lista (oculta)")
+    });
+    let win = wait_for("la ventana principal", Duration::from_secs(10), main_window);
+    assert!(!visible(win), "--minimized: empieza oculta");
+
+    tray_click(hwnd);
+    wait_for("la ventana a la vista", Duration::from_secs(10), || {
+        visible(win).then_some(())
+    });
+    wait_for("la página cargada", Duration::from_secs(30), || {
+        log_has(tmp.path(), "Ventana: ready")
+    });
+
+    post(win, WM_CLOSE, 0);
+    wait_for("la ventana oculta", Duration::from_secs(10), || {
+        (!visible(win)).then_some(())
+    });
+    assert!(
+        app.0.try_wait().unwrap().is_none(),
+        "cerrar no sale de la app"
+    );
+    let cfg = tmp
+        .path()
+        .join("appdata")
+        .join("Anotalo-dev")
+        .join("config.json");
+    wait_for(
+        "el sitio de la ventana guardado",
+        Duration::from_secs(10),
+        || {
+            std::fs::read_to_string(&cfg)
+                .ok()
+                .filter(|c| c.contains("\"window_rect\": ["))
+        },
+    );
+
+    post(hwnd, WM_COMMAND, 5); // "Salir"
+    let status = wait_for("que la app se cierre", EXIT_WAIT, || {
+        app.0.try_wait().unwrap()
+    });
+    assert!(status.success(), "salió con {status}");
+}
+
+/// Sin WebView2 (aquí, un fallo simulado) la app avisa con el enlace de descarga y sigue
+/// grabando desde la bandeja.
+#[test]
+#[ignore]
+fn test_webview_failure_keeps_tray_app() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut app, out, hwnd) = launch_with(tmp.path(), &[("ANOTALO_FAKE_WEBVIEW_FAILURE", "1")]);
+    wait_for("el aviso de WebView2", Duration::from_secs(20), || {
+        log_has(
+            tmp.path(),
+            "Aviso: No se pudo abrir la ventana — Instala WebView2: https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+        )
+    });
+    assert!(main_window().is_none(), "sin ventana principal");
+
+    post(hwnd, WM_HOTKEY, 1); // empieza la nota
+    std::thread::sleep(Duration::from_secs(3));
+    post(hwnd, WM_HOTKEY, 1); // la para
+    wait_for("la nota guardada", Duration::from_secs(120), || {
+        saved_note(&out)
+    });
+
     post(hwnd, WM_COMMAND, 5); // "Salir"
     let status = wait_for("que la app se cierre", EXIT_WAIT, || {
         app.0.try_wait().unwrap()
