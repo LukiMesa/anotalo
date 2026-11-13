@@ -38,3 +38,19 @@
   --font-sans: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
 }
+
+/* Barras de desplazamiento con los colores de la app, en todas las paginas (ventana e instalador):
+   finas, redondeadas y sin flechas; se iluminan al pasar el raton y al arrastrarlas. No usar
+   scrollbar-color ni scrollbar-width: con ellas Chromium ignora estas reglas. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; }
+::-webkit-scrollbar-thumb {
+  background-color: var(--line);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  min-height: 32px;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--line-strong); }
+::-webkit-scrollbar-thumb:active { background-color: var(--orbita); }

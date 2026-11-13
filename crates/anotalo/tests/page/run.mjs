@@ -408,6 +408,23 @@ await check("carpeta lenta: las líneas en directo piden una lista a la vez, y o
   await until(async () => (await page.$$(".item")).length === 7, "las 7 de antes");
 });
 
+await check("barras de desplazamiento con el estilo de la app en toda la ventana", async () => {
+  const st = await page.evaluate(() => {
+    const rules = [...document.styleSheets].flatMap((s) => [...s.cssRules]);
+    const thumb = rules.find((r) => r.selectorText === "::-webkit-scrollbar-thumb");
+    // con scrollbar-color o scrollbar-width en un elemento, Chromium ignora ::-webkit-scrollbar
+    const std = [...document.querySelectorAll("*")].filter((e) => {
+      const cs = getComputedStyle(e);
+      return cs.scrollbarColor !== "auto" || cs.scrollbarWidth !== "auto";
+    }).length;
+    return { thumb: thumb ? thumb.style.backgroundColor : null, std };
+  });
+  if (!st.thumb) throw new Error("sin regla ::-webkit-scrollbar-thumb");
+  eq(st.std, 0, "elementos con scrollbar-color/width");
+  await page.evaluate(() => { const b = document.querySelector(".items"); if (b) b.scrollTop = 40; });
+  await shot("16-scrollbar");
+});
+
 await check("sin errores en la consola, peticiones fallidas ni órdenes desconocidas", async () => {
   const fake = await page.evaluate(() => ({
     unknown: window.__fake.unknown,

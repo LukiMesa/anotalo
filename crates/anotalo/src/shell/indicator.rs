@@ -1,5 +1,6 @@
-//! El indicador de grabación (port de calltx/ui/indicator.py): una píldora abajo al centro, siempre
-//! encima, que no roba el foco y deja pasar los clics. Es una ventana Win32 "layered" con
+//! El indicador de grabación (port de calltx/ui/indicator.py): en una nota, una píldora abajo al
+//! centro (nivel, reloj, "Transcribiendo…", "Copiado"); en una llamada, solo un punto rojo en la
+//! esquina inferior derecha. Siempre encima, no roba el foco y deja pasar los clics. Es una ventana Win32 "layered" con
 //! transparencia por píxel, en su propio hilo: 30 fps mientras se ve, dormido mientras no.
 //!
 //! - `PillModel`: qué se ve en cada momento (entrada, salida, "Marcado" 1,2 s…), sin Windows.
@@ -14,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use anotalo_core::app::AppEvent;
+use anotalo_core::app::{AppEvent, NOTE_LABEL};
 use tiny_skia::Pixmap;
 use windows::Win32::Foundation::{
     COLORREF, CloseHandle, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WAIT_FAILED, WPARAM,
@@ -40,7 +41,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use super::pill::{EXIT_S, PillState, enter_frame, exit_alpha, render_pill};
+use super::pill::{EXIT_S, PillState, enter_frame, exit_alpha, render_dot, render_pill};
 
 /// Estilos de la ventana: nunca se activa ni recibe clics.
 pub const EX_STYLE: WINDOW_EX_STYLE = WINDOW_EX_STYLE(
@@ -57,9 +58,17 @@ const DONE_S: f64 = 1.5;
 /// "Marcado" se ve 1,2 s y vuelve la grabación.
 const MARKED_S: f64 = 1.2;
 
+/// Cómo se ve la grabación: la píldora entera (notas) o solo el punto rojo (llamadas).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Look {
+    #[default]
+    Pill,
+    Dot,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cmd {
-    Recording,
+    Recording(Look),
     Transcribing,
     Done { copied: bool },
     Marked,
@@ -74,6 +83,9 @@ pub struct Frame {
     pub dy: i32,
     /// Segundos de grabación.
     pub elapsed_s: f64,
+    pub look: Look,
+    /// Nada cambia hasta la próxima orden (el punto ya dibujado): no hace falta redibujar.
+    pub still: bool,
 }
 
 /// Qué se ve en cada momento. `now` en segundos.
@@ -86,6 +98,7 @@ pub struct PillModel {
     leaving_at: Option<f64>,
     marked_until: f64,
     visible: bool,
+    look: Look,
 }
 
 impl PillModel {
@@ -106,7 +119,8 @@ impl PillModel {
         }
         self.leaving_at = None;
         match cmd {
-            Cmd::Recording => {
+            Cmd::Recording(look) => {
+                self.look = look;
                 self.started = now;
                 self.marked_until = 0.0;
                 if !self.visible {
@@ -157,18 +171,25 @@ impl PillModel {
         if state == PillState::Recording && now < self.marked_until {
             state = PillState::Marked;
         }
+        let entered = !animate || now - self.shown_at >= super::pill::ENTER_S;
+        let still = self.look == Look::Dot
+            && state == PillState::Recording
+            && entered
+            && self.leaving_at.is_none();
         Some(Frame {
             state,
             alpha,
             dy,
             elapsed_s: now - self.started,
+            look: self.look,
+            still,
         })
     }
 }
 
 /// Lo que la app puede pedirle al indicador (la ventana real, o una falsa en los tests).
 pub trait Pill: Send + Sync {
-    fn show_recording(&self);
+    fn show_recording(&self, look: Look);
     fn push_level(&self, rms: f32);
     fn show_transcribing(&self);
     fn show_done(&self, copied: bool);
@@ -181,6 +202,8 @@ pub trait Pill: Send + Sync {
 pub struct IndicatorWiring {
     enabled: AtomicBool,
     shown: AtomicBool,
+    /// La grabación es una llamada: solo el punto, sin "Transcribiendo…" ni "Guardada".
+    dot: AtomicBool,
     pill: Arc<dyn Pill>,
 }
 
@@ -189,6 +212,7 @@ impl IndicatorWiring {
         IndicatorWiring {
             enabled: AtomicBool::new(enabled),
             shown: AtomicBool::new(false),
+            dot: AtomicBool::new(false),
             pill,
         }
     }
@@ -205,16 +229,25 @@ impl IndicatorWiring {
     pub fn on_event(&self, e: &AppEvent) {
         let enabled = self.enabled.load(Ordering::SeqCst);
         let shown = self.shown.load(Ordering::SeqCst);
+        let dot = self.dot.load(Ordering::SeqCst);
         match e {
-            AppEvent::SessionStarted { .. } if enabled => {
-                self.pill.show_recording();
+            AppEvent::SessionStarted { label } if enabled => {
+                let look = if label == NOTE_LABEL {
+                    Look::Pill
+                } else {
+                    Look::Dot
+                };
+                self.dot.store(look == Look::Dot, Ordering::SeqCst);
+                self.pill.show_recording(look);
                 self.shown.store(true, Ordering::SeqCst);
             }
             AppEvent::Level(v) => self.pill.push_level(*v),
             AppEvent::Marked { .. } if shown && enabled => self.pill.flash_marked(),
+            // al colgar, el punto se va (el aviso de Windows dice "Transcripción guardada")
+            AppEvent::SessionStopping { .. } if shown && enabled && dot => self.pill.hide(),
             AppEvent::SessionStopping { .. } if shown && enabled => self.pill.show_transcribing(),
             AppEvent::SessionEnded { path, copied, .. } => {
-                if shown && enabled && path.is_some() {
+                if shown && enabled && path.is_some() && !dot {
                     self.pill.show_done(*copied);
                 } else {
                     self.pill.hide();
@@ -315,8 +348,8 @@ impl Indicator {
 }
 
 impl Pill for Indicator {
-    fn show_recording(&self) {
-        self.send(Cmd::Recording);
+    fn show_recording(&self, look: Look) {
+        self.send(Cmd::Recording(look));
     }
     fn push_level(&self, rms: f32) {
         let mut l = self.levels.lock().unwrap_or_else(|e| e.into_inner());
@@ -445,7 +478,7 @@ fn window_loop(
                         return;
                     }
                     Msg::Cmd(c) => {
-                        if c == Cmd::Recording {
+                        if matches!(c, Cmd::Recording(_)) {
                             let mut l = levels.lock().unwrap_or_else(|e| e.into_inner());
                             l.iter_mut().for_each(|v| *v = 0.0);
                         }
@@ -461,7 +494,8 @@ fn window_loop(
                 }
                 continue;
             };
-            animating = true;
+            // el punto quieto no se redibuja: el hilo duerme hasta la próxima orden
+            animating = !f.still;
             // barras: suben rápido, bajan en ~120 ms
             let target: Vec<f32> = levels
                 .lock()
@@ -472,8 +506,9 @@ fn window_loop(
             for (s, t) in shown.iter_mut().zip(target) {
                 *s = t.max(*s - dt / 0.12);
             }
-            let img = catch_unwind(AssertUnwindSafe(|| {
-                render(f.state, &shown, f.elapsed_s, scale, (now * 1.2) as f32)
+            let img = catch_unwind(AssertUnwindSafe(|| match f.look {
+                Look::Dot => render_dot(f.state == PillState::Marked, scale),
+                Look::Pill => render(f.state, &shown, f.elapsed_s, scale, (now * 1.2) as f32),
             }));
             let Ok(img) = img else {
                 log::error!("Error dibujando el indicador"); // un fotograma fallido no lo apaga
@@ -485,6 +520,7 @@ fn window_loop(
                 f.alpha,
                 (f.dy as f32 * scale).round() as i32,
                 scale,
+                f.look,
             );
             if !visible {
                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -503,8 +539,19 @@ fn window_loop(
     }
 }
 
-/// Pinta la píldora en la ventana, abajo al centro del área de trabajo.
-unsafe fn blit(hwnd: HWND, img: &Pixmap, alpha: u8, dy: i32, scale: f32) {
+/// Dónde va la imagen (`w`×`h`) en el área de trabajo: la píldora abajo al centro, el punto abajo a
+/// la derecha (junto a la bandeja), a 16 px (× escala) del borde.
+fn origin(look: Look, area: &RECT, w: i32, h: i32, scale: f32, dy: i32) -> (i32, i32) {
+    let margin = (16.0 * scale).round() as i32;
+    let y = area.bottom - h - margin + dy;
+    match look {
+        Look::Pill => ((area.left + area.right - w) / 2, y),
+        Look::Dot => (area.right - w - margin, y),
+    }
+}
+
+/// Pinta la imagen en la ventana, en su sitio del área de trabajo.
+unsafe fn blit(hwnd: HWND, img: &Pixmap, alpha: u8, dy: i32, scale: f32, look: Look) {
     let (w, h) = (img.width() as i32, img.height() as i32);
     // SAFETY: recursos GDI creados y liberados aquí; el DIB tiene w×h×4 bytes.
     unsafe {
@@ -515,8 +562,7 @@ unsafe fn blit(hwnd: HWND, img: &Pixmap, alpha: u8, dy: i32, scale: f32) {
             Some((&raw mut area).cast()),
             SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
         );
-        let x = (area.left + area.right - w) / 2;
-        let y = area.bottom - h - (16.0 * scale).round() as i32 + dy;
+        let (x, y) = origin(look, &area, w, h, scale, dy);
         let screen = GetDC(None);
         let mem = CreateCompatibleDC(Some(screen));
         let bmi = BITMAPINFO {
@@ -587,8 +633,11 @@ mod tests {
     }
 
     impl Pill for FakePill {
-        fn show_recording(&self) {
-            self.push("show_recording");
+        fn show_recording(&self, look: Look) {
+            self.push(match look {
+                Look::Pill => "show_recording(pill)",
+                Look::Dot => "show_recording(dot)",
+            });
         }
         fn push_level(&self, _rms: f32) {
             self.push("push_level");
@@ -636,7 +685,7 @@ mod tests {
         });
         w.on_event(&ended(None, "Nota", true));
         let calls = pill.calls();
-        assert_eq!(calls[0], "show_recording");
+        assert_eq!(calls[0], "show_recording(pill)");
         assert!(calls.contains(&"hide".to_string()));
         assert!(!calls.contains(&"show_transcribing".to_string()));
     }
@@ -647,7 +696,7 @@ mod tests {
         let w = IndicatorWiring::new(true, pill.clone());
         w.on_event(&started("Nota"));
         w.set_enabled(false);
-        assert_eq!(pill.calls(), vec!["show_recording", "hide"]);
+        assert_eq!(pill.calls(), vec!["show_recording(pill)", "hide"]);
     }
 
     #[test]
@@ -659,33 +708,96 @@ mod tests {
         assert_eq!(pill.calls().last().map(String::as_str), Some("hide"));
     }
 
+    /// Una nota: la píldora entera (nivel, reloj, "Transcribiendo…", "Copiado al portapapeles").
     #[test]
-    fn test_marked_and_saved_flow() {
+    fn test_note_shows_the_whole_pill() {
         let pill = Arc::new(FakePill::default());
         let w = IndicatorWiring::new(true, pill.clone());
-        w.on_event(&started("Teams"));
-        w.on_event(&AppEvent::Marked {
-            hms: "00:01:00".into(),
-        });
+        w.on_event(&started("Nota"));
         w.on_event(&AppEvent::SessionStopping {
-            label: "Teams".into(),
+            label: "Nota".into(),
         });
-        w.on_event(&ended(Some("x.md"), "Teams", false));
+        w.on_event(&ended(Some("x.md"), "Nota", true));
         assert_eq!(
             pill.calls(),
             vec![
-                "show_recording",
-                "flash_marked",
+                "show_recording(pill)",
                 "show_transcribing",
-                "show_done"
+                "show_done(copied)"
             ]
         );
+    }
+
+    /// Una llamada: solo el punto rojo en la esquina mientras se graba (y su destello al marcar);
+    /// al colgar se va (el aviso de Windows dice "Transcripción guardada").
+    #[test]
+    fn test_call_shows_only_the_red_dot() {
+        for label in ["Teams", "Llamada"] {
+            let pill = Arc::new(FakePill::default());
+            let w = IndicatorWiring::new(true, pill.clone());
+            w.on_event(&started(label));
+            w.on_event(&AppEvent::Marked {
+                hms: "00:01:00".into(),
+            });
+            w.on_event(&AppEvent::SessionStopping {
+                label: label.into(),
+            });
+            w.on_event(&ended(Some("x.md"), label, false));
+            let calls = pill.calls();
+            assert_eq!(
+                calls[..3],
+                ["show_recording(dot)", "flash_marked", "hide"],
+                "{label}"
+            );
+            assert!(
+                !calls
+                    .iter()
+                    .any(|c| c.starts_with("show_done") || c == "show_transcribing"),
+                "{label}: {calls:?}"
+            );
+        }
+    }
+
+    /// El punto no se redibuja 30 veces por segundo durante toda la llamada: tras aparecer queda
+    /// quieto hasta la siguiente orden (salvo el destello de una marca).
+    #[test]
+    fn test_dot_stays_still_after_appearing() {
+        let mut m = PillModel::default();
+        m.apply(Cmd::Recording(Look::Dot), 0.0);
+        let f = m.frame(0.05, true).unwrap();
+        assert_eq!(f.look, Look::Dot);
+        assert!(!f.still, "entrando");
+        assert!(m.frame(0.5, true).unwrap().still);
+        m.apply(Cmd::Marked, 1.0);
+        let f = m.frame(1.1, true).unwrap();
+        assert_eq!(f.state, PillState::Marked);
+        assert!(!f.still, "destello");
+        let f = m.frame(2.5, true).unwrap();
+        assert_eq!(f.state, PillState::Recording);
+        assert!(f.still);
+        // la píldora de las notas lleva reloj: nunca está quieta
+        let mut p = PillModel::default();
+        p.apply(Cmd::Recording(Look::Pill), 0.0);
+        assert!(!p.frame(5.0, true).unwrap().still);
+    }
+
+    #[test]
+    fn test_pill_bottom_centre_and_dot_bottom_right() {
+        let area = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        assert_eq!(origin(Look::Pill, &area, 120, 32, 1.0, 0), (900, 992));
+        assert_eq!(origin(Look::Dot, &area, 24, 24, 1.0, 0), (1880, 1000));
+        assert_eq!(origin(Look::Dot, &area, 36, 36, 1.5, 0), (1860, 980));
     }
 
     #[test]
     fn test_marked_flash_returns_to_recording() {
         let mut m = PillModel::default();
-        m.apply(Cmd::Recording, 0.0);
+        m.apply(Cmd::Recording(Look::Pill), 0.0);
         assert_eq!(m.frame(0.5, true).unwrap().state, PillState::Recording);
         m.apply(Cmd::Marked, 1.0);
         assert_eq!(m.frame(1.5, true).unwrap().state, PillState::Marked);
@@ -697,7 +809,7 @@ mod tests {
     #[test]
     fn test_done_fades_out_after_its_time() {
         let mut m = PillModel::default();
-        m.apply(Cmd::Recording, 0.0);
+        m.apply(Cmd::Recording(Look::Pill), 0.0);
         m.frame(0.1, true);
         m.apply(Cmd::Done { copied: true }, 1.0);
         assert_eq!(m.frame(2.0, true).unwrap().state, PillState::Copied);
@@ -730,7 +842,7 @@ mod tests {
     #[ignore]
     fn test_render_error_does_not_kill_indicator() {
         let ind = Indicator::spawn_with(flaky, Arc::default());
-        ind.show_recording();
+        ind.show_recording(Look::Pill);
         std::thread::sleep(std::time::Duration::from_millis(400));
         let alive = ind.alive();
         ind.close();
@@ -752,6 +864,23 @@ mod tests {
             !watch.upgrade().is_some_and(|i| i.alive()),
             "la ventana del indicador sigue abierta"
         );
+    }
+
+    /// Durante una llamada el punto se dibuja al aparecer y el hilo vuelve a dormir (no 30 veces por
+    /// segundo durante toda la llamada). Crea una ventana visible un momento.
+    #[test]
+    #[ignore]
+    fn test_still_dot_lets_the_thread_sleep() {
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let ind = Indicator::spawn_with(render_pill, wakes.clone());
+        ind.show_recording(Look::Dot);
+        std::thread::sleep(std::time::Duration::from_millis(400)); // entrada (~0,2 s)
+        let entered = wakes.load(Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        let quiet = wakes.load(Ordering::SeqCst) - entered;
+        ind.hide();
+        ind.close();
+        assert!(quiet <= 3, "{quiet} vueltas en 1 s con el punto quieto");
     }
 
     /// Oculto, el hilo duerme hasta que llega una orden (no 30 veces por segundo todo el día).

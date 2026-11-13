@@ -225,6 +225,30 @@ pub fn render_pill(
     pm
 }
 
+/// El punto de las llamadas: rojo con su halo y un borde oscuro (se ve sobre fondos claros y
+/// rojizos); de acento mientras dura una marca. 24 px a 100 %.
+pub fn render_dot(marked: bool, scale: f32) -> Pixmap {
+    let k = scale.max(0.5);
+    let size = (24.0 * k).round();
+    let mut pm = Pixmap::new(size as u32, size as u32).expect("tamaño del punto");
+    let (c, t) = (size / 2.0, Transform::identity());
+    let (fill, halo) = if marked {
+        (ORBITA, (ORBITA.0, ORBITA.1, ORBITA.2, 60))
+    } else {
+        (ERROR, ERROR_HALO)
+    };
+    for (r, color) in [
+        (11.0 * k, halo),
+        (7.5 * k, (BG.0, BG.1, BG.2, 200)),
+        (6.0 * k, fill),
+    ] {
+        if let Some(circle) = PathBuilder::from_circle(c, c, r) {
+            pm.fill_path(&circle, &paint(color), FillRule::Winding, t, None);
+        }
+    }
+    pm
+}
+
 /// (opacidad 0–255, desplazamiento hacia abajo en px) a los `t` segundos de aparecer (ease-out).
 pub fn enter_frame(t: f64) -> (u8, i32) {
     if t >= ENTER_S {
@@ -346,7 +370,32 @@ mod tests {
             let p = render_pill(st, &[0.1, 0.5, 0.9, 0.6, 0.3, 0.0], 83.0, 1.5, 0.1);
             p.save_png(dir.join(format!("{name}.png"))).unwrap();
         }
+        for (name, marked) in [("dot", false), ("dot-marked", true)] {
+            render_dot(marked, 1.5)
+                .save_png(dir.join(format!("{name}.png")))
+                .unwrap();
+        }
         println!("{}", dir.display());
+    }
+
+    /// El punto de las llamadas: pequeño, redondo, rojo en el centro (de acento al marcar) y
+    /// transparente en las esquinas.
+    #[test]
+    fn test_render_dot() {
+        let dot = render_dot(false, 1.0);
+        assert_eq!((dot.width(), dot.height()), (24, 24));
+        assert_eq!(alpha(&dot, 0, 0), 0);
+        let c = dot.pixel(12, 12).unwrap().demultiply();
+        assert_eq!(
+            (c.red(), c.green(), c.blue(), c.alpha()),
+            (255, 122, 122, 255)
+        );
+        let marked = render_dot(true, 1.0).pixel(12, 12).unwrap().demultiply();
+        assert_eq!(
+            (marked.red(), marked.green(), marked.blue()),
+            (46, 197, 230)
+        );
+        assert_eq!(render_dot(false, 1.5).width(), 36);
     }
 
     #[test]
