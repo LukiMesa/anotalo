@@ -108,7 +108,7 @@ pub struct NameOutcome {
 }
 
 /// Una etiqueta de la app ("Persona 3", `label_me`, `label_others`), no el nombre de alguien.
-fn is_reserved(name: &str, reserved: &[&str]) -> bool {
+pub(crate) fn is_reserved(name: &str, reserved: &[&str]) -> bool {
     let n = name.trim();
     reserved
         .iter()
