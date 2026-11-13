@@ -1,4 +1,6 @@
-# Anotalo (Rust): compila, prueba y comprueba anotalo.exe en Windows. Sube el exe sin firmar.
+# Anotalo (Rust): compila, prueba y comprueba anotalo.exe en Windows y sube el exe sin firmar;
+# prueba el instalador de punta a punta (setup-e2e) y, en una etiqueta v<x.y.z-pre>, publica la
+# pre-release (release). Las etiquetas no pasan por los filtros de paths.
 # La firma con SignPath llega en M5, en este mismo workflow.
 name: Anotalo
 
@@ -16,6 +18,10 @@ on:
       - "scripts/check-deps.ps1"
       - "scripts/get-test-model.ps1"
       - "scripts/fixtures/**"
+      - "scripts/test-setup-e2e.ps1"
+      - "scripts/publish-release.ps1"
+      - "calltx/updater.py"
+      - ".github/release-notes/**"
       - "bench/**"
       - ".github/workflows/anotalo.yml"
   pull_request:
@@ -29,6 +35,10 @@ on:
       - "scripts/check-deps.ps1"
       - "scripts/get-test-model.ps1"
       - "scripts/fixtures/**"
+      - "scripts/test-setup-e2e.ps1"
+      - "scripts/publish-release.ps1"
+      - "calltx/updater.py"
+      - ".github/release-notes/**"
       - "bench/**"
       - ".github/workflows/anotalo.yml"
   workflow_dispatch:
@@ -120,6 +130,31 @@ jobs:
           if ($out -notmatch "Tiempo: ([0-9.]+) s") { throw "falta la línea Tiempo" }
           if ([double]$matches[1] -gt 8) { throw "selftest demasiado lento ($($matches[1]) s): ¿whisper.cpp sin optimizar?" }
 
+      - name: Versión y datos del exe
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $version = @($meta.packages | Where-Object { $_.name -eq "anotalo" })[0].version
+          "Versión de Cargo: $version"
+          # una etiqueta publica exactamente la versión del exe
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and "v$version" -cne $env:GITHUB_REF_NAME) {
+            throw "La etiqueta $env:GITHUB_REF_NAME no es v$version (la versión de Cargo.toml)"
+          }
+          # lo que muestran Windows y SignPath (spec §5.8)
+          $info = (Get-Item target\release\anotalo.exe).VersionInfo
+          $want = [ordered]@{ ProductName = "Anotalo"; CompanyName = "LukiMesa"; FileDescription = "Anotalo"; ProductVersion = $version }
+          foreach ($k in $want.Keys) {
+            if ($info.$k -cne $want[$k]) { throw "anotalo.exe: $k es '$($info.$k)', se esperaba '$($want[$k])'" }
+            "  ${k}: $($info.$k)"
+          }
+          # la vcomp140.dll que el exe lleva dentro e instala junto a Anotalo.exe, con su firma
+          $sig = Get-AuthenticodeSignature target\release\vcomp140.dll
+          if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+            throw "vcomp140.dll: firma $($sig.Status) ($($sig.SignerCertificate.Subject))"
+          }
+          "  vcomp140.dll: $($sig.Status), $($sig.SignerCertificate.Subject)"
+          .\scripts\publish-release.ps1 -DryRun -Exe target\release\anotalo.exe -Tag "v$version"
+
       - uses: actions/upload-artifact@v4
         with:
           name: anotalo-exe
@@ -165,3 +200,62 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "selftest terminó con $LASTEXITCODE" }
           if ($out -notmatch "Vulkan: no disponible") { throw "esperaba 'Vulkan: no disponible'" }
           if ($out -notmatch "ask not what your country") { throw "la transcripción no es la esperada" }
+
+  # Instala de verdad en el runner (desechable): Transcriptor 0.6.4 → Anotalo con el código de
+  # actualización de 0.6.4, actualización con la app abierta y desinstalación (spec §5.8, §7).
+  setup-e2e:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: anotalo-exe
+          path: dist
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fuera de CI, la prueba no corre
+        shell: pwsh
+        run: |
+          $out = pwsh -NoProfile -Command 'try { $env:GITHUB_ACTIONS = "false"; & ./scripts/test-setup-e2e.ps1 -Setup dist\anotalo.exe; exit 0 } catch { $_.Exception.Message; exit 3 }' | Out-String
+          $code = $LASTEXITCODE
+          $out
+          if ($code -ne 3 -or $out -notmatch "Solo en CI") { throw "test-setup-e2e.ps1 no se negó a correr sin GITHUB_ACTIONS=true ni -ThisPcIsDisposable (código $code)" }
+          foreach ($p in "$env:APPDATA\CallTranscriber", "C:\e2e") {
+            if (Test-Path $p) { throw "test-setup-e2e.ps1 creó $p antes de negarse" }
+          }
+
+      - name: Transcriptor 0.6.4 → Anotalo, actualización con la app abierta y desinstalación
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .\scripts\test-setup-e2e.ps1 -Setup dist\anotalo.exe
+
+  # Una etiqueta v<x.y.z-pre> publica Anotalo-Setup-<versión>.exe como pre-release sin firmar
+  # (nunca /releases/latest: Transcriptor 0.6.x no la ve). Una estable se publica firmada (M5).
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, no-vulkan-smoke, setup-e2e]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: anotalo-exe
+          path: dist
+
+      - name: Publicar la pre-release (sin firmar)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # la etiqueta por el entorno, no dentro del script (publish-release.ps1 la valida)
+        run: .\scripts\publish-release.ps1 -Exe dist\anotalo.exe -Tag $env:GITHUB_REF_NAME

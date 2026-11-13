@@ -249,3 +249,49 @@ def test_download_still_rejects_lookalikes(tmp_path):
         with pytest.raises(UpdateError):
             download(release(version="1.0.0", url=url, name=name), tmp_path, lambda p: None,
                      opener=lambda url: pytest.fail("no debe descargar"))
+
+
+def test_bridge_never_installs_a_prerelease():
+    # Las versiones de prueba de Anotalo (1.0.0-alpha.N) nunca llegan a Transcriptor 0.6.x: /latest
+    # no las devuelve y, aunque lo hiciera, ni su versión ni su dirección pasan los filtros.
+    url = "https://github.com/LukiMesa/anotalo/releases/download/v1.0.0-alpha.2/Anotalo-Setup-1.0.0-alpha.2.exe"
+    data = {"tag_name": "v1.0.0-alpha.2", "name": "Anotalo 1.0.0-alpha.2", "prerelease": True,
+            "assets": [{"name": "Anotalo-Setup-1.0.0-alpha.2.exe", "size": 1,
+                        "digest": "sha256:" + "0" * 64, "browser_download_url": url}]}
+    rel = updater.fetch_latest(lambda _url: data)
+    assert rel is None or not updater.is_newer(rel.version, "0.6.4")
+    assert not updater._URL_OK.match(url)
+
+
+def _update_chain():
+    """scripts/fixtures/update_chain.py, la cadena 0.6.4 → Anotalo de la prueba de punta a punta (CI)."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "fixtures" / "update_chain.py"
+    spec = importlib.util.spec_from_file_location("update_chain", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_update_chain_drives_the_update_button_of_0_6_4(tmp_path):
+    chain = _update_chain()
+    setup = tmp_path / "anotalo.exe"
+    setup.write_bytes(b"no es un exe de verdad" * 5000)  # si se lanzara, Windows lo rechazaría
+    launched = []
+    path = chain.chain(setup, tmp_path / "Transcriptor-update", launched.append, log=lambda *a: None)
+    assert path == tmp_path / "Transcriptor-update" / "Anotalo-Setup-1.0.0.exe"
+    assert launched == [path] and path.read_bytes() == setup.read_bytes()
+    assert not list(path.parent.glob("*.part"))
+
+
+def test_update_chain_stops_if_0_6_4_rejects_the_download(tmp_path, monkeypatch):
+    chain = _update_chain()
+    setup = tmp_path / "anotalo.exe"
+    setup.write_bytes(b"x" * 1000)
+    monkeypatch.setattr(chain, "URL", chain.URL.replace("LukiMesa", "otro"))
+    launched = []
+    with pytest.raises(SystemExit, match="no se pudo instalar"):
+        chain.chain(setup, tmp_path / "dl", launched.append, log=lambda *a: None)
+    assert launched == []
