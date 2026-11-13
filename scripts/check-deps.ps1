@@ -14,7 +14,10 @@ if (-not $dumpbin) { throw "No se encontró dumpbin.exe (Build Tools de Visual S
 $allowed = @(
     "KERNEL32.dll", "USER32.dll", "GDI32.dll", "ADVAPI32.dll", "SHELL32.dll", "ole32.dll", "OLEAUT32.dll",
     "WS2_32.dll", "bcrypt.dll", "bcryptprimitives.dll", "ntdll.dll", "CRYPT32.dll", "Secur32.dll", "dbghelp.dll",
-    "combase.dll", "mmdevapi.dll", "propsys.dll", "psapi.dll"
+    "combase.dll", "mmdevapi.dll", "propsys.dll", "psapi.dll",
+    # ventana principal (M3): dwmapi (esquinas, modo oscuro y sombra), y para WebView2 vía wry,
+    # shlwapi (SHCreateMemStream) y comctl32 (SetWindowSubclass; la 5.82 de System32 la tiene)
+    "dwmapi.dll", "shlwapi.dll", "comctl32.dll"
 )
 $crt = '^(MSVCP|VCRUNTIME|VCOMP|api-ms-win-crt-)'
 
