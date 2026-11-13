@@ -222,6 +222,9 @@
   window.__fake = {
     calls, unknown, recs, voices, settings, update, LIVE, INSTRUCTION, COMMAND,
     claudeOutcome: { ok: false, command: COMMAND, error: "No encontré Claude Code (el comando claude) en este PC." },
+    // una carpeta lenta (en red, OneDrive): list_recordings tarda listDelay ms; listing cuenta las
+    // que hay en curso y listingMax, el máximo a la vez
+    listDelay: 0, listing: 0, listingMax: 0,
   };
   function call(method, args) {
     calls.push([method, args]);
@@ -232,6 +235,12 @@
     }
     // asíncrono como el puente de verdad, y una copia: la página no comparte objetos con la API
     const out = JSON.parse(JSON.stringify(h(...args)));
+    if (method === "list_recordings") {
+      const f = window.__fake;
+      f.listing += 1;
+      f.listingMax = Math.max(f.listingMax, f.listing);
+      return new Promise((resolve) => setTimeout(() => { f.listing -= 1; resolve(out); }, f.listDelay || 5));
+    }
     return new Promise((resolve) => setTimeout(() => resolve(out), 5));
   }
   const api = new Proxy({}, {

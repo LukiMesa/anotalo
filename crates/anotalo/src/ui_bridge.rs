@@ -2,7 +2,8 @@
 //!
 //! La página llama a `window.pywebview.api.<orden>(…)` como con la app de Python; `web/bridge.js`
 //! lo manda por `window.ipc` como `{"id", "method", "args"}`. Aquí cada orden corre en un hilo
-//! aparte, como con pywebview (listar cientos de grabaciones nunca frena la ventana), y la
+//! aparte, como con pywebview (listar cientos de grabaciones nunca frena la ventana); las rápidas
+//! (`QUICK`, los botones de la ventana) en hilos propios, para no esperar detrás de las lentas. La
 //! respuesta sale por `post`, que la lleva al hilo de la ventana para evaluar `reply_js`. Ninguna
 //! orden lanza un error a la página: siempre hay respuesta, aunque sea `{"ok": false, …}`.
 
@@ -28,40 +29,59 @@ pub struct Reply {
 /// Hilos para las órdenes.
 const WORKERS: usize = 4;
 
+/// Órdenes rápidas, con sus propios hilos: los botones de la ventana (y lo poco que pide la página
+/// al abrirse) nunca esperan detrás de listas lentas (una carpeta en red, OneDrive).
+const QUICK: &[&str] = &[
+    "window_minimize",
+    "window_toggle_maximize",
+    "window_close",
+    "log_js",
+    "get_state",
+];
+/// Hilos para las órdenes rápidas: dos, por si un botón espera al hilo de la ventana (hasta 5 s).
+const QUICK_WORKERS: usize = 2;
+
 type Job = Box<dyn FnOnce() + Send>;
 
 pub struct Bridge {
     commands: Arc<dyn Commands>,
     post: Arc<dyn Fn(Reply) + Send + Sync>,
     jobs: Sender<Job>,
+    quick: Sender<Job>,
+}
+
+/// `n` hilos que corren lo que llegue por la cola que devuelve; terminan cuando ya no existe.
+fn pool(name: &str, n: usize) -> Sender<Job> {
+    let (jobs, queue) = mpsc::channel::<Job>();
+    let queue = Arc::new(Mutex::new(queue));
+    for i in 0..n {
+        let queue = queue.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("{name}-{i}"))
+            .spawn(move || {
+                loop {
+                    let job = queue.lock().unwrap_or_else(PoisonError::into_inner).recv();
+                    let Ok(job) = job else { break }; // el puente ya no existe
+                    if catch_unwind(AssertUnwindSafe(job)).is_err() {
+                        log::error!("Error interno respondiendo a la página");
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            log::error!("No se pudo crear un hilo para las órdenes de la página: {e}");
+        }
+    }
+    jobs
 }
 
 impl Bridge {
     /// `post` lleva cada respuesta al hilo de la ventana (se llama desde los hilos de las órdenes).
     pub fn new(commands: Arc<dyn Commands>, post: Box<dyn Fn(Reply) + Send + Sync>) -> Bridge {
-        let (jobs, queue) = mpsc::channel::<Job>();
-        let queue = Arc::new(Mutex::new(queue));
-        for i in 0..WORKERS {
-            let queue = queue.clone();
-            let spawned = std::thread::Builder::new()
-                .name(format!("orden-ui-{i}"))
-                .spawn(move || {
-                    loop {
-                        let job = queue.lock().unwrap_or_else(PoisonError::into_inner).recv();
-                        let Ok(job) = job else { break }; // el puente ya no existe
-                        if catch_unwind(AssertUnwindSafe(job)).is_err() {
-                            log::error!("Error interno respondiendo a la página");
-                        }
-                    }
-                });
-            if let Err(e) = spawned {
-                log::error!("No se pudo crear un hilo para las órdenes de la página: {e}");
-            }
-        }
         Bridge {
             commands,
             post: Arc::from(post),
-            jobs,
+            jobs: pool("orden-ui", WORKERS),
+            quick: pool("orden-ui-rapida", QUICK_WORKERS),
         }
     }
 
@@ -85,6 +105,10 @@ impl Bridge {
             Some(Value::Array(a)) => a.clone(),
             _ => Vec::new(),
         };
+        let queue = match &method {
+            Ok(m) if QUICK.contains(&m.as_str()) => &self.quick,
+            _ => &self.jobs,
+        };
         let (commands, post) = (self.commands.clone(), self.post.clone());
         let job: Job = Box::new(move || {
             let json = match method {
@@ -93,7 +117,7 @@ impl Bridge {
             };
             post(Reply { id, json });
         });
-        if self.jobs.send(job).is_err() {
+        if queue.send(job).is_err() {
             log::error!("No hay hilos para las órdenes de la página");
         }
     }
@@ -254,6 +278,64 @@ mod tests {
         assert_eq!(first.id, 2, "la rápida no espera a la lenta");
         assert_eq!(rx.recv_timeout(WAIT).expect("la lenta").id, 1);
         assert!(t0.elapsed() >= Duration::from_millis(500));
+    }
+
+    /// "list_recordings" espera hasta que la prueba abra la puerta (una carpeta en red lenta); lo
+    /// demás responde enseguida.
+    #[derive(Default)]
+    struct Gate {
+        open: Mutex<bool>,
+        opened: std::sync::Condvar,
+    }
+
+    impl Commands for Gate {
+        fn call(&self, method: &str, _args: &[Value]) -> Value {
+            if method == "list_recordings" {
+                let open = self.open.lock().unwrap();
+                let _open = self.opened.wait_while(open, |o| !*o).unwrap();
+            }
+            json!({"method": method})
+        }
+    }
+
+    /// Las listas lentas ocupan todos los hilos y hay más en cola: los botones de la ventana (y
+    /// lo poco que pide la página al abrirse) siguen respondiendo.
+    #[test]
+    fn test_window_commands_never_wait_for_slow_lists() {
+        let gate = Arc::new(Gate::default());
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let post = Box::new(move |r: Reply| {
+            let _ = tx.lock().unwrap().send(r);
+        });
+        let b = Bridge::new(gate.clone(), post);
+        let slow = WORKERS as u64 + 2;
+        for id in 0..slow {
+            b.on_message(&format!(
+                r#"{{"id":{id},"method":"list_recordings","args":[]}}"#
+            ));
+        }
+        for (i, m) in QUICK.iter().enumerate() {
+            let id = 100 + i as u64;
+            b.on_message(&format!(r#"{{"id":{id},"method":"{m}","args":[]}}"#));
+            let r = rx
+                .recv_timeout(WAIT)
+                .unwrap_or_else(|_| panic!("{m} no respondió con las listas ocupando los hilos"));
+            assert_eq!(
+                r,
+                Reply {
+                    id,
+                    json: json!({"method": m})
+                }
+            );
+        }
+        *gate.open.lock().unwrap() = true;
+        gate.opened.notify_all();
+        let mut ids: Vec<u64> = (0..slow)
+            .map(|_| rx.recv_timeout(WAIT).expect("la lista").id)
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (0..slow).collect::<Vec<_>>());
     }
 
     #[test]

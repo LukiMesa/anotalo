@@ -383,6 +383,31 @@ await check("tamaño mínimo (940×600): el detalle no se desborda", async () =>
   await shot("10-detail-min-size");
 });
 
+// Con una carpeta lenta, cada línea en directo pedía otra lista sin esperar a la anterior y
+// llenaban los hilos de Anotalo (los botones de la ventana esperaban detrás).
+await check("carpeta lenta: las líneas en directo piden una lista a la vez, y otra al terminar", async () => {
+  const NEW = "2026-11-12_1200_Zoom.md";
+  const live = (text) => page.evaluate(([id, text]) =>
+    window.onEvent({ type: "line", id, ts: "00:00:20", speaker: "Persona 2", me: false, text }), [LIVE, text]);
+  await page.evaluate(() => { window.__fake.listDelay = 2000; window.__fake.listingMax = 0; });
+  const before = (await calls("list_recordings")).length;
+  await live("Uno.");
+  await until(() => page.evaluate(() => window.__fake.listing === 1), "la primera lista en curso");
+  // una grabación nueva mientras tanto: la primera lista no la trae
+  await page.evaluate((id) => window.__fake.recs.unshift({
+    ...window.__fake.recs[0], id, app: "Zoom", time: "12:00", call_title: "Recién guardada", lines: [],
+  }), NEW);
+  await live("Dos.");
+  await sleep(1100);  // su espera de 800 ms ya pasó y la primera sigue en curso
+  eq(await page.evaluate(() => window.__fake.listing), 1, "listas en curso");
+  await until(async () => (await page.$$(`.item[data-id="${NEW}"]`)).length === 1, "otra carga al terminar trae la nueva", 6000);
+  eq(await page.evaluate(() => window.__fake.listingMax), 1, "como mucho una lista a la vez");
+  eq((await calls("list_recordings")).length - before, 2, "la primera y una más");
+  // vuelta a como estaba
+  await page.evaluate(() => { window.__fake.listDelay = 0; window.__fake.recs.shift(); window.onEvent({ type: "recordings" }); });
+  await until(async () => (await page.$$(".item")).length === 7, "las 7 de antes");
+});
+
 await check("sin errores en la consola, peticiones fallidas ni órdenes desconocidas", async () => {
   const fake = await page.evaluate(() => ({
     unknown: window.__fake.unknown,

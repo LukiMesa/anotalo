@@ -112,8 +112,31 @@ $$(".nav").forEach((b) => b.addEventListener("click", () => show(b.dataset.view)
 
 // --- lista --------------------------------------------------------------
 // animate: "stagger" (carga inicial, filtro, búsqueda) | "new" (solo las filas nuevas) | false
+// Una carga a la vez: con una carpeta lenta (en red, OneDrive) cada línea en directo pedía otra
+// lista sin esperar a la anterior y llenaban los hilos de Anotalo. Lo que se pida mientras tanto
+// se junta en una carga más al terminar, con la animación más visible de las pedidas.
 let listGen = 0;
-async function loadList(animate = "new") {
+let listing = null;    // la carga en curso
+let listAgain = null;  // la siguiente: { animate, done, resolve, reject }
+const animRank = (a) => (a === "stagger" ? 2 : a ? 1 : 0);
+function loadList(animate = "new") {
+  if (listing) {
+    if (!listAgain) {
+      listAgain = { animate };
+      listAgain.done = new Promise((resolve, reject) => Object.assign(listAgain, { resolve, reject }));
+    } else if (animRank(animate) > animRank(listAgain.animate)) {
+      listAgain.animate = animate;
+    }
+    return listAgain.done;
+  }
+  listing = fetchList(animate).finally(() => {
+    const next = listAgain;
+    listing = listAgain = null;
+    if (next) loadList(next.animate).then(next.resolve, next.reject);
+  });
+  return listing;
+}
+async function fetchList(animate) {
   const gen = ++listGen;
   // Con un cliente elegido, la lista sin ese filtro da los clientes de los chips.
   const [items, unfiltered] = await Promise.all([
