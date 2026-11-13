@@ -24,7 +24,7 @@ pub fn profile_from(env: Option<&str>, exe: &Path, localappdata: &Path) -> Profi
         _ => {}
     }
     let norm = |p: &Path| p.to_string_lossy().trim_end_matches('\\').to_lowercase();
-    let install = norm(&localappdata.join("Programs").join("Anotalo"));
+    let install = norm(&install_dir_in(localappdata));
     match exe.parent() {
         Some(dir) if norm(dir) == install => Profile::Installed,
         _ => Profile::Dev,
@@ -47,6 +47,15 @@ fn local_appdata() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| home().join("AppData").join("Local"))
+}
+
+/// `%LOCALAPPDATA%\Programs\Anotalo`: donde instala el instalador (por usuario).
+pub fn install_dir() -> PathBuf {
+    install_dir_in(&local_appdata())
+}
+
+pub fn install_dir_in(localappdata: &Path) -> PathBuf {
+    localappdata.join("Programs").join("Anotalo")
 }
 
 /// `%APPDATA%\Anotalo` (ajustes, log, voces), o `Anotalo-dev`.
@@ -90,5 +99,14 @@ pub fn instance_names(p: Profile) -> (&'static str, &'static str) {
     match p {
         Profile::Installed => ("AnotaloMutex", "AnotaloShow"),
         Profile::Dev => ("AnotaloDevMutex", "AnotaloDevShow"),
+    }
+}
+
+/// El evento con nombre con el que el instalador pide a la app que se cierre (guardando la
+/// grabación en curso).
+pub fn quit_event(p: Profile) -> &'static str {
+    match p {
+        Profile::Installed => "AnotaloQuit",
+        Profile::Dev => "AnotaloDevQuit",
     }
 }

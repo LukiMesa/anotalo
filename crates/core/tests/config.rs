@@ -3,10 +3,12 @@
 use std::path::{Path, PathBuf};
 
 use anotalo_core::config::{
-    LoadProblem, Settings, load_settings, load_settings_checked, migrate_legacy_in, save_settings,
+    DEFAULT_CLAUDE_INSTRUCTION, LoadProblem, Settings, load_settings, load_settings_checked,
+    migrate_legacy_in, read_output_dir, save_settings,
 };
 use anotalo_core::paths::{
-    Profile, data_dir_in, default_output_dir_in, instance_names, legacy_data_dir_in, profile_from,
+    Profile, data_dir_in, default_output_dir, default_output_dir_in, install_dir_in,
+    instance_names, legacy_data_dir_in, profile_from, quit_event,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -361,5 +363,64 @@ fn test_unreadable_config_is_reported() {
     assert!(
         matches!(problem, Some(LoadProblem::Unreadable(_))),
         "{problem:?}"
+    );
+}
+
+#[test]
+fn test_m4_defaults_and_python_config() {
+    let s = Settings::defaults(Profile::Installed);
+    assert!(s.auto_update_check);
+    assert_eq!(s.claude_instruction, DEFAULT_CLAUDE_INSTRUCTION);
+    let py = load_settings(&fixture("config_python.json"), Profile::Installed);
+    assert!(py.auto_update_check);
+    assert_eq!(py.claude_instruction, DEFAULT_CLAUDE_INSTRUCTION);
+}
+
+#[test]
+fn test_empty_instruction_means_default() {
+    let mut s = Settings::defaults(Profile::Installed);
+    s.claude_instruction = "  \n".into();
+    assert_eq!(
+        s.claude_instruction_or_default(),
+        DEFAULT_CLAUDE_INSTRUCTION
+    );
+    s.claude_instruction = "Resume".into();
+    assert_eq!(s.claude_instruction_or_default(), "Resume");
+}
+
+#[test]
+fn test_reads_output_dir_without_writing() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("config.json");
+    std::fs::write(&p, r#"{"output_dir": "D:\\Llamadas"}"#).unwrap();
+    assert_eq!(
+        read_output_dir(&p, Profile::Installed),
+        PathBuf::from(r"D:\Llamadas")
+    );
+    std::fs::write(&p, "{roto").unwrap();
+    assert_eq!(
+        read_output_dir(&p, Profile::Installed),
+        default_output_dir(Profile::Installed)
+    );
+    let names: Vec<_> = std::fs::read_dir(d.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["config.json"]);
+    assert_eq!(
+        read_output_dir(&d.path().join("no.json"), Profile::Dev),
+        default_output_dir(Profile::Dev)
+    );
+}
+
+#[test]
+fn test_install_dir_and_quit_event() {
+    assert_eq!(
+        install_dir_in(Path::new(r"C:\Users\a\AppData\Local")),
+        PathBuf::from(r"C:\Users\a\AppData\Local\Programs\Anotalo")
+    );
+    assert_eq!(
+        (quit_event(Profile::Installed), quit_event(Profile::Dev)),
+        ("AnotaloQuit", "AnotaloDevQuit")
     );
 }

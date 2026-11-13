@@ -28,5 +28,7 @@
   "last_run_version": "",
   "hotkey_mark": "<ctrl>+<alt>+m",
   "igpu_faster": null,
-  "igpu_name": ""
+  "igpu_name": "",
+  "auto_update_check": true,
+  "claude_instruction": "Saca los acuerdos, tareas y pendientes de esta llamada y propón cómo ejecutarlos"
 }

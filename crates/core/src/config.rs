@@ -45,9 +45,15 @@ macro_rules! with_settings_fields {
             hotkey_mark,
             igpu_faster,
             igpu_name,
+            auto_update_check,
+            claude_instruction,
         )
     };
 }
+
+/// La instrucción de "Copiar para Claude" si el usuario no pone otra.
+pub const DEFAULT_CLAUDE_INSTRUCTION: &str =
+    "Saca los acuerdos, tareas y pendientes de esta llamada y propón cómo ejecutarlos";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Settings {
@@ -88,6 +94,10 @@ pub struct Settings {
     pub igpu_faster: Option<bool>,
     /// La GPU integrada en la que se midió ("" = ninguna).
     pub igpu_name: String,
+    /// Buscar actualizaciones al arrancar y cada 6 h.
+    pub auto_update_check: bool,
+    /// La instrucción de "Copiar para Claude" (en blanco = `DEFAULT_CLAUDE_INSTRUCTION`).
+    pub claude_instruction: String,
     /// Claves desconocidas: se conservan.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -126,7 +136,18 @@ impl Settings {
             hotkey_mark: "<ctrl>+<alt>+m".into(),
             igpu_faster: None,
             igpu_name: String::new(),
+            auto_update_check: true,
+            claude_instruction: DEFAULT_CLAUDE_INSTRUCTION.into(),
             extra: Map::new(),
+        }
+    }
+
+    /// La instrucción de "Copiar para Claude": la del usuario, o la de por defecto si está en blanco.
+    pub fn claude_instruction_or_default(&self) -> &str {
+        if self.claude_instruction.trim().is_empty() {
+            DEFAULT_CLAUDE_INSTRUCTION
+        } else {
+            &self.claude_instruction
         }
     }
 
@@ -255,6 +276,24 @@ pub fn load_settings_checked(path: &Path, p: Profile) -> (Settings, Option<LoadP
     with_settings_fields!(take);
     s.extra = map;
     (s, None)
+}
+
+/// Solo la carpeta de grabaciones de un `config.json`: su `output_dir` si no está vacío; si no (o si
+/// falta el archivo o no es un objeto JSON), la de por defecto. Para quien solo lee (el servidor MCP,
+/// el desinstalador): nunca escribe nada (ni la copia `.bad`) ni registra más que en debug.
+pub fn read_output_dir(path: &Path, p: Profile) -> PathBuf {
+    let dir = fs::read(path)
+        .inspect_err(|e| log::debug!("No se pudo leer {} ({e})", path.display()))
+        .ok()
+        .and_then(|bytes| {
+            let text = String::from_utf8_lossy(&bytes);
+            serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}'))
+                .inspect_err(|e| log::debug!("Config inválida en {} ({e})", path.display()))
+                .ok()
+        })
+        .and_then(|v| v.get("output_dir")?.as_str().map(str::to_string))
+        .filter(|d| !d.trim().is_empty());
+    dir.map_or_else(|| default_output_dir(p), PathBuf::from)
 }
 
 /// `bool(x)` de Python para lo que pudiera haber en `detect_meet`.
