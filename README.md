@@ -12,6 +12,25 @@ En las llamadas, tu voz sale como **Yo** y la de los demás como **Otros**. Todo
 - Indicador pequeño abajo en el centro mientras se graba.
 - Tema oscuro propio con Sora / Instrument Sans / JetBrains Mono.
 
+## Anotalo (versión de prueba)
+
+**Anotalo** es la nueva versión de Transcriptor, reescrita desde cero (un solo `.exe`, sin Python). Mientras esté en pruebas, la versión estable sigue siendo Transcriptor 0.6.4, que no la ofrece como actualización.
+
+- **Instalar**: descarga `Anotalo-Setup-<versión>.exe` de la versión de prueba más reciente en **Releases** y ábrelo. Se instala en tu usuario, sin permisos de administrador.
+  - **Sustituye a Transcriptor** en ese PC: lo cierra y lo desinstala, y conserva tus grabaciones, tus ajustes (atajo, etiquetas, carpeta) y el inicio con Windows.
+  - Si Windows muestra **"Windows protegió tu PC"**: *Más información* → *Ejecutar de todas formas* (las versiones de prueba no están firmadas).
+- **Volver a Transcriptor**: desinstala Anotalo e instala `Transcriptor-Setup-0.6.4.exe` desde la versión v0.6.4 de Releases.
+- **Desinstalar**: desde *Configuración › Aplicaciones › Anotalo*. Nunca borra tus grabaciones; la casilla *Borrar también los ajustes y los modelos descargados* quita además `%APPDATA%\Anotalo` y `%LOCALAPPDATA%\Anotalo` (y lo que quedara de Transcriptor en `%APPDATA%\CallTranscriber` y `%LOCALAPPDATA%\Transcriptor`), salvo una carpeta que contenga tus grabaciones.
+  - Los modelos que descargó Transcriptor quedan en `%USERPROFILE%\.cache\huggingface`; Anotalo no los usa y puedes borrarlos a mano.
+- **Claude Code**: en *Ajustes › General*, **Conectar con Claude Code** deja que Claude Code lea tus transcripciones cuando se lo pidas (solo lectura). O a mano:
+
+  ```powershell
+  claude mcp add --scope user anotalo -- "$env:LOCALAPPDATA\Programs\Anotalo\Anotalo.exe" mcp
+  claude mcp remove --scope user anotalo    # para quitarlo
+  ```
+
+  **Copiar para Claude**, en cada grabación, copia la transcripción con tu instrucción para pegarla en Claude. Qué sale del PC en cada caso: [política de privacidad](PRIVACY.md).
+
 ## Instalación
 
 1. Descarga `Transcriptor-Setup-x.y.z.exe` desde **Releases** de este repositorio.
