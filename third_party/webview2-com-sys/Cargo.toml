@@ -1,0 +1,38 @@
+# webview2-com-sys 0.39.1 (https://github.com/wravery/webview2-rs, commit edc2caf8, MIT; ver
+# LICENSE) sin el cargador precompilado de Microsoft (spec §5.1). Lo usa el `[patch.crates-io]` de
+# la raíz del repositorio en lugar del de crates.io.
+#
+# Cambios respecto al original (ver README.md):
+# - sin build.rs ni las carpetas x64/x86/arm64 (WebView2LoaderStatic.lib, WebView2Loader.dll);
+# - src/lib.rs: las funciones del cargador ya no se enlazan con WebView2LoaderStatic.lib; las
+#   define anotalo-winsys (crates/winsys/src/webview2_loader.rs).
+# src/bindings.rs y src/declared_interfaces.rs son los originales, sin tocar.
+
+[package]
+edition = "2021"
+rust-version = "1.82"
+name = "webview2-com-sys"
+version = "0.39.1"
+description = "Bindings generated with the windows crate for the WebView2 COM APIs (sin el cargador precompilado)"
+license = "MIT"
+repository = "https://github.com/wravery/webview2-rs"
+publish = false
+
+[lib]
+name = "webview2_com_sys"
+path = "src/lib.rs"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_System_WinRT",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[dependencies.windows-core]
+version = "0.62"

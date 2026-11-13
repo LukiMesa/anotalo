@@ -6,3 +6,8 @@ resolver = "3"
 version = "1.0.0-alpha.1"
 edition = "2024"
 license = "MIT"
+
+# webview2-com-sys sin el cargador precompilado de Microsoft (WebView2LoaderStatic.lib, spec §5.1):
+# el nuestro está en crates/winsys/src/webview2_loader.rs. Ver third_party/webview2-com-sys/README.md.
+[patch.crates-io]
+webview2-com-sys = { path = "third_party/webview2-com-sys" }

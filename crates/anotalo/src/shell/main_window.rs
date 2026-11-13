@@ -5,6 +5,8 @@
 //! `frame.rs`). Dentro va la página en WebView2 a través de `wry`, como ventana hija que deja libre
 //! el borde fino para redimensionar. La página se sirve desde el exe (`anotalo://app/…`) y habla
 //! con Rust por `window.ipc` (ver `ui_bridge.rs` y `web/bridge.js`). Cerrarla solo la oculta.
+//! WebView2 se carga con nuestro cargador (`anotalo_winsys::webview2_loader`), no con el de
+//! Microsoft.
 //!
 //! Todo lo de la ventana es "consciente del DPI por monitor" (v2), aunque el resto del hilo no lo
 //! sea: las coordenadas que entran y salen (`create`, `rect`, `work_areas`) son píxeles físicos.
@@ -15,6 +17,7 @@ use std::num::NonZeroIsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use anotalo_core::paths;
+use anotalo_winsys::webview2_loader;
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings9;
 use windows::Win32::Foundation::{
     COLORREF, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, RECT, RPC_E_CHANGED_MODE,
@@ -244,11 +247,18 @@ pub struct MainWindow {
 impl MainWindow {
     /// Crea la ventana y la página. `on_ipc` recibe cada mensaje de la página (en este hilo).
     /// `rect`: dónde, en píxeles físicos (ver `initial_rect`). `start_hidden`: `--minimized`.
+    /// Sin WebView2, el error dice de dónde descargarlo (`webview2_loader::NOT_FOUND`).
     pub fn create(
         on_ipc: Box<dyn Fn(String)>,
         start_hidden: bool,
         rect: RECT,
     ) -> Result<MainWindow, String> {
+        let runtime = webview2_loader::find_runtime()?;
+        log::info!(
+            "WebView2 {} ({})",
+            runtime.version().map_or("?".into(), |v| v.to_string()),
+            runtime.dll.display()
+        );
         // WebView2 necesita un apartamento COM de un solo hilo
         // SAFETY: se queda iniciado lo que viva el hilo (la ventana vive lo que la app).
         if unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) } == RPC_E_CHANGED_MODE {

@@ -1,6 +1,7 @@
 # Comprueba de qué DLL depende cada exe (spec §5.1): CRT estático (sin MSVCP/VCRUNTIME/VCOMP/UCRT),
 # vulkan-1.dll y vcomp140.dll solo de carga diferida y, por lo demás, únicamente DLL de Windows, cargadas solo de
-# System32 (/DEPENDENTLOADFLAG:0x800: una DLL con el mismo nombre junto al exe no se carga).
+# System32 (/DEPENDENTLOADFLAG:0x800: una DLL con el mismo nombre junto al exe no se carga). Y que no
+# lleve dentro el cargador precompilado de WebView2 de Microsoft (WebView2LoaderStatic.lib).
 # Uso: .\scripts\check-deps.ps1 -Exe target\release\anotalo.exe[,target\release\examples\bench.exe]
 param([Parameter(Mandatory = $true)][string[]]$Exe)
 $ErrorActionPreference = "Stop"
@@ -53,6 +54,15 @@ foreach ($file in $Exe) {
     $flag = (& $dumpbin.FullName /nologo /loadconfig $file) | Where-Object { $_ -match '^\s*([0-9A-Fa-f]+) Dependent Load Flag' } | ForEach-Object { [Convert]::ToInt32($Matches[1], 16) }
     "Dependent Load Flag: $flag"
     if (-not ($flag -band 0x800)) { $problems += "${file}: falta /DEPENDENTLOADFLAG:0x800 (las DLL importadas deben cargarse solo de System32)" }
+    # El cargador de WebView2 es el nuestro (crates/winsys/src/webview2_loader.rs, §5.1). El de
+    # Microsoft (WebView2LoaderStatic.lib) lo delatan estos textos suyos en UTF-16.
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
+    $content = $latin1.GetString([IO.File]::ReadAllBytes($file))
+    foreach ($mark in "WebView2Loader", "Software\Policies\Microsoft\Edge\WebView2") {
+        if ($content.Contains($latin1.GetString([Text.Encoding]::Unicode.GetBytes($mark)))) {
+            $problems += "${file}: lleva el cargador de WebView2 de Microsoft (`"$mark`")"
+        }
+    }
 }
 
 if ($problems) { $problems | ForEach-Object { "FALLO: $_" }; exit 1 }
