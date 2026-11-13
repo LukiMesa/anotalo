@@ -220,3 +220,40 @@ fn act_as_terminal(result: &Path) {
     let screen = String::from_utf16_lossy(&buf[..read as usize]);
     std::fs::write(result, format!("{codes}\n{screen}")).unwrap();
 }
+
+/// El manifiesto del exe (recurso `RT_MANIFEST` 1), leído sin ejecutarlo.
+fn manifest_of(exe: &str) -> String {
+    use windows::Win32::Foundation::FreeLibrary;
+    use windows::Win32::System::LibraryLoader::{
+        FindResourceW, LOAD_LIBRARY_AS_DATAFILE, LoadLibraryExW, LoadResource, LockResource,
+        SizeofResource,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::RT_MANIFEST;
+    use windows::core::{HSTRING, PCWSTR};
+    // SAFETY: el exe se abre como datos (no se ejecuta nada); el recurso vive hasta FreeLibrary.
+    unsafe {
+        let m = LoadLibraryExW(&HSTRING::from(exe), None, LOAD_LIBRARY_AS_DATAFILE).unwrap();
+        let text = match FindResourceW(Some(m), PCWSTR(1 as _), RT_MANIFEST) {
+            r if r.is_invalid() => String::new(),
+            r => {
+                let data = LoadResource(Some(m), r).unwrap();
+                let len = SizeofResource(Some(m), r) as usize;
+                let p = LockResource(data) as *const u8;
+                String::from_utf8_lossy(std::slice::from_raw_parts(p, len)).into_owned()
+            }
+        };
+        let _ = FreeLibrary(m);
+        text
+    }
+}
+
+/// Sin `asInvoker`, Windows trataría `Anotalo-Setup-x.exe` como un instalador antiguo y pediría
+/// permisos de administrador (detección de instaladores de UAC). Se instala por usuario.
+#[test]
+fn the_exe_runs_as_invoker() {
+    let m = manifest_of(EXE);
+    assert!(m.contains(r#"level="asInvoker""#), "{m}");
+    assert!(m.contains(r#"uiAccess="false""#), "{m}");
+    // Windows 10 y 11
+    assert!(m.contains("{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"), "{m}");
+}

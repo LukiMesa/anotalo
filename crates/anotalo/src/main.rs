@@ -14,6 +14,7 @@ use anotalo_whisper::{DeviceKind, LoadOptions, Model, Params, devices};
 mod console;
 mod diagnostics;
 mod record;
+mod setup_cmd;
 mod shell;
 mod tray_app;
 mod ui_bridge;
@@ -326,6 +327,14 @@ fn mcp() -> ExitCode {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Lo primero: el mismo exe es el instalador (`Anotalo-Setup-….exe`, `/VERYSILENT`, `--install`)
+    // y el desinstalador (`--uninstall`).
+    let setup = std::env::current_exe().ok().and_then(|exe| {
+        anotalo_setup::cmdline::setup_mode(&args, &exe, &anotalo_core::paths::install_dir())
+    });
+    if let Some(mode) = setup {
+        return setup_cmd::run(mode);
+    }
     let command = parse_args(&args);
     // La app de la bandeja se engancha ella misma; `mcp` solo usa las tuberías que recibe.
     if !matches!(command, Ok(Command::Tray | Command::Mcp)) {

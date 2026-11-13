@@ -3,6 +3,8 @@ name = "anotalo-whisper"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Pasa a anotalo (su build.rs) la ruta de vcomp140.dll: DEP_ANOTALO_WHISPER_VCOMP.
+links = "anotalo_whisper"
 
 [dependencies]
 

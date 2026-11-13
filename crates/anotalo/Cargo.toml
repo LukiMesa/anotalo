@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 anotalo-core = { path = "../core" }
+anotalo-setup = { path = "../setup" }
 anotalo-whisper = { path = "../whisper" }
 anotalo-winaudio = { path = "../winaudio" }
 anotalo-winsys = { path = "../winsys" }

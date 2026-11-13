@@ -37,6 +37,7 @@ name = "anotalo"
 version = "1.0.0-alpha.1"
 dependencies = [
  "anotalo-core",
+ "anotalo-setup",
  "anotalo-whisper",
  "anotalo-winaudio",
  "anotalo-winsys",

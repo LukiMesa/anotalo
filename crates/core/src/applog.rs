@@ -130,7 +130,18 @@ impl Log for RotatingLog {
 
 /// `dir\app.log` como registro de toda la app. Nivel INFO, o DEBUG con `ANOTALO_LOG=debug`.
 pub fn init(dir: &Path, also_stderr: bool) -> io::Result<()> {
-    let mut log = RotatingLog::new(&dir.join("app.log"), MAX_BYTES, BACKUPS)?;
+    init_named(dir, "app.log", MAX_BYTES, BACKUPS, also_stderr)
+}
+
+/// `dir\file` como registro del proceso (el instalador usa `setup.log`), con su tamaño y copias.
+pub fn init_named(
+    dir: &Path,
+    file: &str,
+    max_bytes: u64,
+    backups: usize,
+    also_stderr: bool,
+) -> io::Result<()> {
+    let mut log = RotatingLog::new(&dir.join(file), max_bytes, backups)?;
     log.stderr = also_stderr;
     // vive lo que vive el proceso
     log::set_logger(Box::leak(Box::new(log)))

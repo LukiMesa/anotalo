@@ -236,6 +236,11 @@ fn copy_openmp_runtime(profile_dir: &Path) {
         }
     }
     println!("cargo:rerun-if-changed={}", dll.display());
+    // para que anotalo la lleve dentro del exe (su build.rs: DEP_ANOTALO_WHISPER_VCOMP)
+    println!(
+        "cargo::metadata=vcomp={}",
+        profile_dir.join("vcomp140.dll").display()
+    );
 }
 
 /// La vcomp140.dll de 64 bits más reciente de las Build Tools (ni la de depuración ni la "onecore").

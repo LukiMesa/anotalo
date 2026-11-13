@@ -148,6 +148,86 @@ fn tray_app_records_a_note_with_the_hotkey() {
     assert!(status.success(), "salió con {status}");
 }
 
+/// El instalador pide salir con el evento de salida (`AnotaloDevQuit` en el perfil dev): la nota en
+/// curso se guarda y la app sale con 0. Solo la recibe la app de este test: si hubiera otra Anotalo
+/// de desarrollo abierta, `launch` habría fallado (la segunda instancia sale enseguida).
+#[test]
+#[ignore]
+fn quit_signal_saves_the_note_and_exits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut app, out, hwnd) = launch(tmp.path());
+
+    post(hwnd, WM_HOTKEY, 1); // empieza la nota
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(app.0.try_wait().unwrap().is_none(), "la app sigue abierta");
+    anotalo_winsys::instance::signal("AnotaloDevQuit");
+    let status = wait_for("que la app se cierre", Duration::from_secs(60), || {
+        app.0.try_wait().unwrap()
+    });
+    assert!(status.success(), "salió con {status}");
+    assert!(saved_note(&out).is_some(), "la nota no se guardó");
+    assert!(log_has(tmp.path(), "lo pide el instalador").is_some());
+}
+
+/// El instalador pide salir a una app que acaba de lanzar, mientras aún crea su ventana: la espera
+/// de WebView2 se come el WM_QUIT. La app tiene que salir igual (con 0), sin el aviso de "Instala
+/// WebView2" ni quedarse oculta con la instancia única.
+#[test]
+#[ignore]
+fn quit_signal_while_the_window_opens() {
+    use anotalo_winsys::instance;
+    assert!(
+        !instance::is_held("AnotaloDevMutex"),
+        "hay otra Anotalo de desarrollo abierta: ciérrala antes"
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let appdata = tmp.path().join("appdata");
+    let data = appdata.join("Anotalo-dev");
+    std::fs::create_dir_all(&data).unwrap();
+    let cfg = serde_json::json!({ "output_dir": tmp.path().join("out"), "auto_mode": false, "copy_on_stop": false });
+    std::fs::write(data.join("config.json"), cfg.to_string()).unwrap();
+    let mut app = Kill(
+        Command::new(env!("CARGO_BIN_EXE_anotalo"))
+            .arg("--minimized")
+            .env("ANOTALO_PROFILE", "dev")
+            .env("APPDATA", &appdata)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_for("la app con su instancia", Duration::from_secs(30), || {
+        instance::is_held("AnotaloDevMutex").then_some(())
+    });
+    // desde ya, sin parar: la primera que llega es la del arranque
+    let end = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(st) = app.0.try_wait().unwrap() {
+            break st;
+        }
+        assert!(
+            Instant::now() < end,
+            "la app no salió: {:?}",
+            std::fs::read_to_string(app_log(tmp.path()))
+        );
+        instance::signal("AnotaloDevQuit");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let log = std::fs::read_to_string(app_log(tmp.path())).unwrap();
+    assert!(status.success(), "salió con {status}: {log}");
+    assert!(log.contains("lo pide el instalador"), "{log}");
+    assert!(!log.contains("No se pudo abrir la ventana"), "{log}");
+    assert!(
+        !log.contains("Anotalo iniciado"),
+        "no arranca lo que ya se cierra: {log}"
+    );
+    assert!(
+        log.contains("Se sale antes de terminar de arrancar"),
+        "{log}"
+    );
+}
+
 /// ¿La ventana tiene un motivo para frenar el apagado ("Guardando la transcripción…")?
 fn blocks_shutdown(hwnd: HWND) -> bool {
     let mut len = 0u32;

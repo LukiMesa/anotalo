@@ -83,6 +83,9 @@ const TRAY_RETRY_MS: u32 = 5_000;
 const TRAY_RETRIES: u32 = 12;
 /// El icono de los avisos.
 const TOAST_ICON: &[u8] = include_bytes!("../assets/anotalo-256.png");
+/// El instalador pide salir (evento `quit_event`): se sale como con "Salir", guardando la
+/// grabación en curso.
+const WM_APP_QUIT_REQUEST: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 8;
 /// Al salir con "Salir", lo que se espera a que se vean los avisos pendientes.
 const TOASTS_WAIT: Duration = Duration::from_secs(3);
 /// Lo que un hilo de las órdenes espera a que el hilo principal cambie un atajo o mueva la
@@ -609,6 +612,8 @@ struct Shell {
     clicks: Debounce,
     toasts: Arc<Toasts>,
     quitting: Cell<bool>,
+    /// Ya se pidió el fin del bucle de mensajes (`post_quit`).
+    quit_posted: Cell<bool>,
     taskbar_created: u32,
     profile: Profile,
 }
@@ -731,6 +736,9 @@ impl Shell {
             )
         };
         match made {
+            // se pidió salir mientras se creaba (el instalador, Windows que se apaga): ni ventana
+            // ni aviso; la espera de WebView2 pudo comerse el WM_QUIT (ver `run`)
+            _ if self.quitting.get() => log::info!("Ventana sin abrir: Anotalo se está cerrando"),
             Ok(w) => {
                 let hwnd = self.hwnd;
                 w.set_listener(Box::new(move |c| {
@@ -849,6 +857,14 @@ impl Shell {
         }
     }
 
+    /// Termina el bucle de mensajes, y lo anota: si llega mientras se crea la ventana, la espera de
+    /// WebView2 se come el WM_QUIT y `run` lo repite.
+    fn post_quit(&self) {
+        self.quit_posted.set(true);
+        // SAFETY: cola de este hilo.
+        unsafe { PostQuitMessage(0) };
+    }
+
     /// Quita el icono, los atajos, el indicador y el motivo de bloqueo del apagado.
     fn teardown(&self) {
         // SAFETY: temporizadores propios.
@@ -884,6 +900,10 @@ impl Handler for Shell {
                 }
             }
             WM_APP_CALL => self.calls.run_pending(self),
+            WM_APP_QUIT_REQUEST => {
+                log::info!("Cerrando Anotalo: lo pide el instalador");
+                self.command(TrayCommand::Quit);
+            }
             WM_APP_SHOW => {
                 if !self.show_window() {
                     self.toasts.notify(
@@ -966,8 +986,7 @@ impl Handler for Shell {
                     save_rect(&self.app, r);
                 }
                 self.teardown();
-                // SAFETY: cola de este hilo.
-                unsafe { PostQuitMessage(0) };
+                self.post_quit();
             }
             WM_APP_QUIT_DONE => {
                 self.teardown();
@@ -975,8 +994,7 @@ impl Handler for Shell {
                 if !self.toasts.wait(TOASTS_WAIT) {
                     log::info!("Se sale sin esperar más a los avisos");
                 }
-                // SAFETY: cola de este hilo.
-                unsafe { PostQuitMessage(0) };
+                self.post_quit();
             }
             m if m == self.taskbar_created && m != 0 => {
                 self.tray_failures.set(0);
@@ -1257,10 +1275,17 @@ pub fn run() -> ExitCode {
         }))),
         toasts,
         quitting: Cell::new(false),
+        quit_posted: Cell::new(false),
         taskbar_created: window::taskbar_created(),
         profile,
     });
     window::set_handler(Some(shell.clone()));
+    // El instalador pide salir para actualizar o desinstalar. Cuanto antes: una petición que llega
+    // sin nadie escuchando se pierde, y el instalador esperaría 90 s para luego terminarla.
+    instance::on_signal(
+        paths::quit_event(profile),
+        Box::new(move || window::post(hwnd_raw, WM_APP_QUIT_REQUEST, 0)),
+    );
     shell.add_tray();
     shell.open_window(start_hidden, bridge, settings.window_rect);
     // SAFETY: temporizador de la ventana propia.
@@ -1271,13 +1296,23 @@ pub fn run() -> ExitCode {
         Box::new(move || window::post(hwnd_raw, WM_APP_SHOW, 0)),
     );
 
-    app.start();
-    log::info!(
-        "Anotalo iniciado (atajo {}, marcas {}, modo automático {})",
-        settings.hotkey,
-        settings.hotkey_mark,
-        if settings.auto_mode { "sí" } else { "no" }
-    );
+    if shell.quitting.get() {
+        // Se pidió salir mientras se creaba la ventana: no se arranca nada. Si el WM_QUIT ya
+        // salió, la espera de WebView2 (GetMessage) se lo comió: se repite, o `window::run` no
+        // acabaría nunca. Si no, lo manda WM_APP_QUIT_DONE cuando la app termine de cerrarse.
+        log::info!("Se sale antes de terminar de arrancar");
+        if shell.quit_posted.get() {
+            shell.post_quit();
+        }
+    } else {
+        app.start();
+        log::info!(
+            "Anotalo iniciado (atajo {}, marcas {}, modo automático {})",
+            settings.hotkey,
+            settings.hotkey_mark,
+            if settings.auto_mode { "sí" } else { "no" }
+        );
+    }
     window::run();
     window::set_handler(None);
     drop(shell);
