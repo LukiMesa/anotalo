@@ -45,7 +45,6 @@ use anotalo_winaudio::sources::{pick_mic, pick_others};
 use anotalo_winsys::{clipboard, consent, instance, toast};
 use serde_json::{Value, json};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
 use windows::Win32::System::Shutdown::{ShutdownBlockReasonCreate, ShutdownBlockReasonDestroy};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::Shell::ShellExecuteW;
@@ -982,21 +981,9 @@ impl Handler for Shell {
     }
 }
 
-/// Sin consola propia (doble clic, inicio de Windows) se suelta la que Windows abrió para el exe.
-/// Devuelve true si se lanzó desde una terminal (entonces el registro también sale por ella).
-fn detach_console() -> bool {
-    let mut ids = [0u32; 2];
-    // SAFETY: búfer propio.
-    let n = unsafe { GetConsoleProcessList(&mut ids) };
-    if n == 1 {
-        // SAFETY: soltar la consola propia.
-        let _ = unsafe { FreeConsole() };
-    }
-    n > 1
-}
-
 pub fn run() -> ExitCode {
-    let from_terminal = detach_console();
+    // Lanzada desde una terminal, el registro también sale por ella.
+    let from_terminal = crate::console::attach_parent();
     let profile = paths::profile();
     let data = paths::data_dir(profile);
     if let Err(e) = std::fs::create_dir_all(&data).and_then(|()| applog::init(&data, from_terminal))

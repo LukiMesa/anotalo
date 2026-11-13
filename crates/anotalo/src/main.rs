@@ -1,4 +1,7 @@
 //! Anotalo: transcriptor de llamadas y notas (reescritura en Rust de Transcriptor).
+// Un programa de ventanas: sin consola que parpadee. Las órdenes usan la de quien las lanza
+// (`console::attach_parent`). Los tests unitarios siguen siendo de consola.
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -8,6 +11,7 @@ use anotalo_core::models::CATALOG;
 use anotalo_core::routing::PLATFORMS;
 use anotalo_whisper::{DeviceKind, LoadOptions, Model, Params, devices};
 
+mod console;
 mod diagnostics;
 mod record;
 mod shell;
@@ -40,7 +44,10 @@ const USAGE: &str = "Uso:
                  [--mic-only] [--seconds <n>] [--model <auto|large-v3-turbo|…>]
                  [--device <auto|gpu|cpu>] [--language <es>]
   anotalo nombrar <archivo.md> <etiqueta> <nombre>
-  anotalo voces [borrar <nombre>]";
+  anotalo voces [borrar <nombre>]
+  anotalo mcp                      (servidor MCP para Claude Code; solo lectura)
+
+Desde PowerShell, añade \"| Out-Host\" para esperar a que termine.";
 
 /// "Anotalo <versión>", lo que imprime `--version`.
 fn version_line() -> String {
@@ -66,6 +73,8 @@ enum Command {
     /// Las voces guardadas.
     Voices,
     ForgetVoice(String),
+    /// El servidor MCP para Claude Code, por stdin/stdout.
+    Mcp,
 }
 
 fn parse_args(args: &[String]) -> Result<Command, String> {
@@ -98,6 +107,7 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
         Some("voces") if args.len() == 3 && args[1] == "borrar" => {
             Ok(Command::ForgetVoice(args[2].clone()))
         }
+        Some("mcp") if args.len() == 1 => Ok(Command::Mcp),
         _ => Err(USAGE.to_string()),
     }
 }
@@ -300,10 +310,30 @@ fn selftest(model: Option<&Path>, wav: Option<&Path>) -> Result<(), String> {
     }
 }
 
+/// `anotalo mcp`: el servidor MCP por stdin/stdout, de solo lectura. Sin registro en archivo, sin
+/// instancia única y sin tocar la consola: Claude Code le da sus tuberías y guarda lo que salga
+/// por stderr.
+fn mcp() -> ExitCode {
+    init_log();
+    match anotalo_core::mcp::tools::run_stdio(anotalo_core::paths::profile()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            log::error!("El servidor MCP se detuvo: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match parse_args(&args) {
+    let command = parse_args(&args);
+    // La app de la bandeja se engancha ella misma; `mcp` solo usa las tuberías que recibe.
+    if !matches!(command, Ok(Command::Tray | Command::Mcp)) {
+        console::attach_parent();
+    }
+    match command {
         Ok(Command::Tray) => tray_app::run(),
+        Ok(Command::Mcp) => mcp(),
         Ok(Command::Version) => {
             println!("{}", version_line());
             ExitCode::SUCCESS
@@ -391,6 +421,24 @@ mod tests {
             assert!(parse_args(&s(bad)).is_err(), "{bad:?}");
         }
         assert!(super::USAGE.contains("anotalo nombrar <archivo.md> <etiqueta> <nombre>"));
+    }
+
+    #[test]
+    fn parses_mcp() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert!(matches!(
+            super::parse_args(&s(&["mcp"])),
+            Ok(super::Command::Mcp)
+        ));
+        assert!(super::parse_args(&s(&["mcp", "x"])).is_err());
+        assert!(super::USAGE.contains(
+            "\n  anotalo mcp                      (servidor MCP para Claude Code; solo lectura)\n"
+        ));
+        assert!(
+            super::USAGE.ends_with(
+                "\n\nDesde PowerShell, añade \"| Out-Host\" para esperar a que termine."
+            )
+        );
     }
 
     #[test]
