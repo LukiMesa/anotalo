@@ -6,7 +6,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_ACCESS_DENIED, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS,
+    SetHandleInformation, WAIT_OBJECT_0,
+};
+use windows::Win32::System::Console::{
+    GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -139,6 +145,7 @@ pub fn wait_exit(pids: &[u32], timeout: Duration) -> bool {
 /// esté en un trabajo (job) que mata a sus hijos. Si el trabajo no deja salir de él, se lanza
 /// dentro. Devuelve su pid.
 pub fn spawn_detached(exe: &Path, args: &[&str], workdir: &Path) -> Result<u32, String> {
+    keep_std_handles();
     let base = DETACHED_PROCESS.0 | CREATE_NEW_PROCESS_GROUP.0;
     let spawn = |flags: u32| {
         Command::new(exe)
@@ -156,6 +163,23 @@ pub fn spawn_detached(exe: &Path, args: &[&str], workdir: &Path) -> Result<u32, 
     }
     .map_err(|e| format!("no se pudo lanzar {} ({e})", exe.display()))?;
     Ok(child.id())
+}
+
+/// Que nadie herede la entrada y la salida de este proceso. `Command` deja heredar todo lo que sea
+/// heredable aunque reciba `Stdio::null()`: el programa lanzado "suelto" se quedaría con la
+/// tubería de quien nos lanzó, que esperaría (PowerShell con `| Out-Host`) a que se cerrara.
+fn keep_std_handles() {
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: identificadores estándar de este proceso; si no valen, falla sin más.
+        unsafe {
+            if let Ok(h) = GetStdHandle(which)
+                && !h.is_invalid()
+                && !h.0.is_null()
+            {
+                let _ = SetHandleInformation(h, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
+            }
+        }
+    }
 }
 
 /// Lanza `exe` oculto (sin ventana) con la línea de argumentos tal cual (`cmd.exe /c "…"` necesita
