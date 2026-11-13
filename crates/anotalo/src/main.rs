@@ -11,6 +11,7 @@ use anotalo_core::models::CATALOG;
 use anotalo_core::routing::PLATFORMS;
 use anotalo_whisper::{DeviceKind, LoadOptions, Model, Params, devices};
 
+mod claude_code;
 mod console;
 mod diagnostics;
 mod record;

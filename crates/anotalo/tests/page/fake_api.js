@@ -7,14 +7,22 @@
   "use strict";
   const fold = (s) => String(s ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   const LIVE = "2026-11-12_1130_Teams.md";
+  // index.html?installed: la versión instalada (con actualizador); si no, la de desarrollo
+  const INSTALLED = location.search.includes("installed");
+  const INSTRUCTION = "Saca los acuerdos, tareas y pendientes de esta llamada y propón cómo ejecutarlos";
+  const COMMAND = 'claude mcp add --scope user anotalo-dev -- "C:\\Users\\usuario\\anotalo\\target\\release\\anotalo.exe" mcp';
 
   const settings = {
-    auto_mode: true, autostart: false, copy_on_stop: true, detect_browsers: true, detect_discord: false,
+    auto_mode: true, auto_update_check: true, autostart: false, claude_instruction: INSTRUCTION, copy_on_stop: true,
+    detect_browsers: true, detect_discord: false,
     detect_slack: true, detect_teams: true, detect_whatsapp: true, detect_zoom: true,
     hotkey: "<ctrl>+<alt>+r", hotkey_mark: "<ctrl>+<alt>+m", label_me: "Yo", label_others: "Otros",
     language: "es", model: "large-v3-turbo", output_dir: "C:\\Users\\usuario\\Documents\\Anotalo",
     release_after_min: 10, show_indicator: true,
   };
+  // la foto del actualizador (UpdateManager::snapshot)
+  const update = { state: "idle", version: null, title: null, progress: null, error: null, current: "1.0.0-alpha.2" };
+  let connecting = false;
 
   const L = (ts, speaker, text) => ({ ts, speaker, text, mark: false });
   const M = (ts) => ({ ts, speaker: "", text: "", mark: true });
@@ -164,18 +172,37 @@
     open_folder: () => OK,
     get_state: () => ({
       state: "recording", hotkey: settings.hotkey, device: "GPU · NVIDIA GeForce RTX 3060 (Vulkan)",
-      version: "1.0.0-alpha.2", frozen: false, kind: "call", update: null,
+      version: "1.0.0-alpha.2", frozen: INSTALLED, kind: "call", update: INSTALLED ? { ...update } : null,
     }),
-    check_updates: () => err("Solo en la versión instalada"),
-    install_update: () => err("Solo en la versión instalada"),
+    // en la instalada responden enseguida; el resultado llega como {"type": "update", …}
+    check_updates: () => (INSTALLED ? OK : err("Solo en la versión instalada")),
+    install_update: () => (INSTALLED ? OK : err("Solo en la versión instalada")),
     toggle_call: () => OK,
     get_settings: () => ({ ...settings }),
     set_setting(key, value) {
       if (!(key in settings)) return err(`Ajuste desconocido: ${key}`);
-      if (key === "autostart") return err("Solo en la versión instalada");
+      if (key === "autostart" && !INSTALLED) return err("Solo en la versión instalada");
+      if (key === "claude_instruction" && [...String(value)].length > 2000) {
+        return err("La instrucción es demasiado larga (máximo 2000 caracteres)");
+      }
       settings[key] = value;
       return OK;
     },
+    copy_for_claude: (id) => (find(id) ? OK : err("La grabación ya no existe")),
+    // responde enseguida; el resultado llega después como {"type": "claude", …}
+    // (window.__fake.claudeOutcome; por defecto, sin claude en el PC)
+    connect_claude() {
+      if (!connecting) {
+        connecting = true;
+        setTimeout(() => {
+          connecting = false;
+          window.onEvent({ type: "claude", ...window.__fake.claudeOutcome });
+        }, 1200);  // lo bastante para que la prueba vea el botón ocupado aunque el PC vaya lento
+      }
+      return { ok: true, pending: true };
+    },
+    claude_command: () => ({ command: COMMAND }),
+    copy_claude_command: () => OK,
     set_hotkey(spec) { return handlers.set_setting("hotkey", spec); },
     set_hotkey_mark(spec) {
       if (spec === settings.hotkey) return err("Ese atajo ya es el de grabar");
@@ -192,7 +219,10 @@
   };
 
   const calls = [], unknown = [];
-  window.__fake = { calls, unknown, recs, voices, settings, LIVE };
+  window.__fake = {
+    calls, unknown, recs, voices, settings, update, LIVE, INSTRUCTION, COMMAND,
+    claudeOutcome: { ok: false, command: COMMAND, error: "No encontré Claude Code (el comando claude) en este PC." },
+  };
   function call(method, args) {
     calls.push([method, args]);
     const h = handlers[method];

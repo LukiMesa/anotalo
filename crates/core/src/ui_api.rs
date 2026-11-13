@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
@@ -12,19 +13,24 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use serde_json::{Map, Value, json};
 
 use crate::app::{App, CALL_LABEL, CopyText, SessionKind};
+use crate::claude::{Connect, connect, display_command, format_for_claude};
 use crate::library::{Kind, Recording, Trash, fold, list_recordings, parse_recording, to_readable};
 use crate::meta::{set_client, validate_client};
 use crate::paths::{Profile, profile};
 use crate::speaker::memory::VoiceStore;
 use crate::speaker::naming::{forget_in_call_prints, is_reserved, name_in_call, validate_name};
+use crate::updater::UpdateManager;
 
 const MONTHS: [&str; 12] = [
     "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic",
 ];
-/// Los ajustes que la ventana puede cambiar (los de Python más `hotkey_mark`), en orden.
-pub const EDITABLE: [&str; 18] = [
+/// Los ajustes que la ventana puede cambiar (los de Python más `hotkey_mark`,
+/// `auto_update_check` y `claude_instruction`), en orden.
+pub const EDITABLE: [&str; 20] = [
     "auto_mode",
+    "auto_update_check",
     "autostart",
+    "claude_instruction",
     "copy_on_stop",
     "detect_browsers",
     "detect_discord",
@@ -50,6 +56,25 @@ pub const CAPTURE_TIMEOUT: Duration = Duration::from_secs(20);
 const GONE: &str = "La grabación ya no existe";
 const INSTALLED_ONLY: &str = "Solo en la versión instalada";
 const LOG_JS_CHARS: usize = 2000;
+/// Lo más largo que puede ser la instrucción de "Copiar para Claude", en caracteres.
+pub const INSTRUCTION_CHARS: usize = 2000;
+const NO_CLAUDE: &str = "No encontré Claude Code (el comando claude) en este PC.";
+
+/// Ejecuta `claude` con esos argumentos: (código de salida, lo que escribió), o por qué no se pudo.
+pub type ClaudeRunner =
+    Box<dyn Fn(&Path, &[String]) -> Result<(i32, String), String> + Send + Sync>;
+
+/// "Conectar con Claude Code": dónde está `claude` y cómo se ejecuta (en Windows lo pone la app).
+pub struct ClaudeCode {
+    /// El nombre del servidor en Claude Code (`claude::mcp_name`).
+    pub name: String,
+    /// Este exe: Claude Code lo lanzará con `mcp`.
+    pub exe: PathBuf,
+    /// Dónde está `claude`, o None si no está en este PC.
+    pub find: Box<dyn Fn() -> Option<PathBuf> + Send + Sync>,
+    /// Con su propio límite de tiempo.
+    pub run: ClaudeRunner,
+}
 
 /// "Guardar como" con el nombre propuesto; None si se cancela.
 pub type SaveDialog = Box<dyn Fn(&str) -> Option<PathBuf> + Send + Sync>;
@@ -80,6 +105,11 @@ pub struct UiDeps {
     /// Lo que va detrás de la versión y los ajustes en "Copiar diagnóstico" (audio, registro…).
     pub diagnostics: Box<dyn Fn() -> String + Send + Sync>,
     pub version: String,
+    /// El actualizador: solo en la versión instalada (None en la de desarrollo).
+    pub updater: Option<Arc<UpdateManager>>,
+    pub claude: ClaudeCode,
+    /// Un aviso para la página (`window.onEvent`), desde cualquier hilo.
+    pub page_event: Box<dyn Fn(Value) + Send + Sync>,
 }
 
 pub struct UiApi {
@@ -98,6 +128,11 @@ pub struct UiApi {
     capture: Arc<Capture>,
     /// Los cambios en las voces guardadas van de uno en uno (cargar, cambiar, guardar).
     voices: Mutex<()>,
+    updater: Option<Arc<UpdateManager>>,
+    claude: Arc<ClaudeCode>,
+    page_event: Arc<dyn Fn(Value) + Send + Sync>,
+    /// Hay una conexión con Claude Code en curso.
+    connecting: Arc<AtomicBool>,
 }
 
 fn ok() -> Value {
@@ -181,6 +216,9 @@ impl UiApi {
             prints_dir,
             diagnostics,
             version,
+            updater,
+            claude,
+            page_event,
         } = deps;
         UiApi {
             app,
@@ -197,6 +235,10 @@ impl UiApi {
             version,
             capture: Arc::new(Capture::new(hotkey_capture)),
             voices: Mutex::new(()),
+            updater,
+            claude: Arc::new(claude),
+            page_event: Arc::from(page_event),
+            connecting: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -248,6 +290,10 @@ impl UiApi {
             "rename_voice" => self.rename_voice(s(0), s(1)),
             "forget_voice" => self.forget_voice(s(0)),
             "copy_diagnostics" => self.copy_diagnostics(),
+            "copy_for_claude" => self.copy_for_claude(s(0)),
+            "connect_claude" => self.connect_claude(),
+            "claude_command" => self.claude_command(),
+            "copy_claude_command" => self.copy_claude_command(),
             _ => err(format!("Orden desconocida: {method}")),
         }
     }
@@ -379,6 +425,22 @@ impl UiApi {
             return err(GONE);
         };
         match (self.copy_text)(&to_readable(&parse_recording(&p))) {
+            Ok(()) => ok(),
+            Err(e) => err(format!("No se pudo copiar: {e}")),
+        }
+    }
+
+    /// "Copiar para Claude": la instrucción de los ajustes y la transcripción, al portapapeles.
+    pub fn copy_for_claude(&self, id: &str) -> Value {
+        let Some(p) = self.path(id) else {
+            return err(GONE);
+        };
+        let instruction = self
+            .app
+            .settings()
+            .claude_instruction_or_default()
+            .to_string();
+        match format_for_claude(&p, &instruction).and_then(|text| (self.copy_text)(&text)) {
             Ok(()) => ok(),
             Err(e) => err(format!("No se pudo copiar: {e}")),
         }
@@ -552,17 +614,82 @@ impl UiApi {
             "version": self.version,
             "frozen": profile() == Profile::Installed,
             "kind": self.app.session_kind().map(kind_label),
-            "update": Value::Null,
+            "update": self.updater.as_ref().map(|u| u.snapshot()),
         })
     }
 
-    /// Las actualizaciones llegan con el instalador (M4).
+    /// "Buscar actualizaciones". Comprueba en otro hilo: el resultado llega a la página como
+    /// `{"type": "update", …}`.
     pub fn check_updates(&self) -> Value {
-        err(INSTALLED_ONLY)
+        self.with_updater("buscar actualizaciones", |u| u.check(true))
     }
 
+    /// "Actualizar": descarga e instala en otro hilo (o espera a que termine la grabación).
     pub fn install_update(&self) -> Value {
-        err(INSTALLED_ONLY)
+        self.with_updater("instalar actualización", |u| u.install())
+    }
+
+    fn with_updater(&self, what: &str, f: impl FnOnce(&UpdateManager) + Send + 'static) -> Value {
+        let Some(u) = self.updater.clone() else {
+            return err(INSTALLED_ONLY);
+        };
+        match thread::Builder::new()
+            .name(what.into())
+            .spawn(move || f(&u))
+        {
+            Ok(_) => ok(),
+            Err(e) => {
+                log::error!("No se pudo {what}: {e}");
+                err(format!("No se pudo {what}: {e}"))
+            }
+        }
+    }
+
+    // --- Claude Code -----------------------------------------------------------------
+
+    /// La orden para conectar Claude Code a mano.
+    pub fn claude_command(&self) -> Value {
+        json!({"command": display_command(&self.claude.name, &self.claude.exe)})
+    }
+
+    pub fn copy_claude_command(&self) -> Value {
+        match (self.copy_text)(&display_command(&self.claude.name, &self.claude.exe)) {
+            Ok(()) => ok(),
+            Err(e) => err(format!("No se pudo copiar: {e}")),
+        }
+    }
+
+    /// "Conectar con Claude Code". `claude` puede tardar (hasta su límite por orden), así que se
+    /// conecta en otro hilo y la página recibe el resultado como `{"type": "claude", "ok", …}`.
+    /// Mientras hay una conexión en curso, otra petición no lanza una segunda.
+    pub fn connect_claude(&self) -> Value {
+        let pending = json!({"ok": true, "pending": true});
+        if self.connecting.swap(true, Ordering::SeqCst) {
+            return pending;
+        }
+        let (claude, page, busy) = (
+            self.claude.clone(),
+            self.page_event.clone(),
+            self.connecting.clone(),
+        );
+        let spawned = thread::Builder::new()
+            .name("conectar-claude".into())
+            .spawn(move || {
+                let found = (claude.find)();
+                let r = connect(found.as_deref(), &claude.name, &claude.exe, &|exe, args| {
+                    (claude.run)(exe, args)
+                });
+                busy.store(false, Ordering::SeqCst);
+                page(connect_event(r));
+            });
+        match spawned {
+            Ok(_) => pending,
+            Err(e) => {
+                self.connecting.store(false, Ordering::SeqCst);
+                log::error!("No se pudo conectar con Claude Code: {e}");
+                err(format!("No se pudo conectar con Claude Code: {e}"))
+            }
+        }
     }
 
     /// Botón "Grabar llamada": empieza una llamada manual o para lo que se esté grabando.
@@ -584,13 +711,21 @@ impl UiApi {
         if !EDITABLE.contains(&key) {
             return err(format!("Ajuste desconocido: {key}"));
         }
-        let value = if key == "release_after_min" {
-            match py_int(&value).filter(|v| RELEASE_OPTIONS.contains(v)) {
+        let value = match key {
+            "release_after_min" => match py_int(&value).filter(|v| RELEASE_OPTIONS.contains(v)) {
                 Some(v) => Value::from(v),
                 None => return err("Valor no válido"),
+            },
+            "claude_instruction"
+                if value
+                    .as_str()
+                    .is_some_and(|s| s.chars().count() > INSTRUCTION_CHARS) =>
+            {
+                return err(format!(
+                    "La instrucción es demasiado larga (máximo {INSTRUCTION_CHARS} caracteres)"
+                ));
             }
-        } else {
-            value
+            _ => value,
         };
         match self.app.apply_setting(key, value) {
             Ok(()) => ok(),
@@ -684,6 +819,22 @@ impl UiApi {
         let mut out = self.set_setting("output_dir", path.clone().into());
         out["path"] = path.into();
         out
+    }
+}
+
+/// El aviso a la página con el resultado de "Conectar con Claude Code".
+fn connect_event(r: Connect) -> Value {
+    match r {
+        Connect::Connected => json!({"type": "claude", "ok": true}),
+        Connect::NotFound { command } => {
+            json!({"type": "claude", "ok": false, "command": command, "error": NO_CLAUDE})
+        }
+        Connect::Failed { command, error } => json!({
+            "type": "claude",
+            "ok": false,
+            "command": command,
+            "error": format!("Claude Code respondió con un error: {error}"),
+        }),
     }
 }
 

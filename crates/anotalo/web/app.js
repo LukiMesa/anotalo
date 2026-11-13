@@ -225,6 +225,7 @@ async function select(id, quiet = false) {
       <div><h2>${esc(title)}</h2>${r.call_title ? `<div class="ctitle">${esc(r.call_title)}</div>` : ""}<div class="meta"><span>${esc(r.full_date)}</span><span>${esc(r.start_end)}</span><span>${esc(r.duration)}</span></div></div>
       <div class="actions">
         <button class="btn primary" id="act-copy">${icon("copy")}Copiar</button>
+        <button class="btn" id="act-claude" title="Copia la transcripción con tu instrucción, para pegarla en Claude">Copiar para Claude</button>
         <button class="btn" id="act-save">${icon("download")}Descargar .md</button>
         <button class="btn icon danger" id="act-del" aria-label="Borrar grabación" title="Borrar" ${r.live ? "disabled" : ""}>${icon("trash")}</button>
       </div>
@@ -237,6 +238,7 @@ async function select(id, quiet = false) {
   renderClient(r);
   $$(".person[data-name]", d).forEach((b) => b.addEventListener("click", () => renamePerson(id, b.dataset.name)));
   $("#act-copy").onclick = async () => { const res = await api().copy(id); toast(res.ok ? checked("Copiado al portapapeles") : esc(res.error)); };
+  $("#act-claude").onclick = async () => { const res = await api().copy_for_claude(id); toast(res.ok ? checked("Copiado para Claude") : esc(res.error)); };
   $("#act-save").onclick = async () => { const res = await api().save_as(id); if (res.ok) toast(checked("Guardado")); else if (!res.cancelled) toast(esc(res.error)); };
   $("#act-del").onclick = () => remove(id);
   if (quiet) $("#lines").scrollTop = scroll;
@@ -351,6 +353,8 @@ window.onEvent = (evt) => {
     setMaxIcon(evt.maximized);
   } else if (evt.type === "update") {
     renderUpdate(evt);
+  } else if (evt.type === "claude") {
+    renderClaude(evt);
   } else if (evt.type === "recordings") {
     loadList().then(() => { if (evt.select) select(evt.select); });
   }
@@ -413,6 +417,7 @@ function renderSettings() {
   $$("[data-text]").forEach((i) => { i.value = S.settings[i.dataset.text] ?? ""; });
   $$("[data-select]").forEach((s) => { s.value = String(S.settings[s.dataset.select]); });
   $("#folder").textContent = S.settings.output_dir || "";
+  $("#claude-instruction").value = S.settings.claude_instruction ?? "";
   renderKeyfield(null);
 }
 $$("[data-setting]").forEach((b) => b.addEventListener("click", async () => {
@@ -546,12 +551,49 @@ $("#copy-diag").onclick = async () => {
   toast(res.ok ? checked("Diagnóstico copiado al portapapeles") : esc(res.error || "No se pudo copiar"));
 };
 
+// --- Claude Code ------------------------------------------------------------
+// Conectar puede tardar (Claude Code tarda en arrancar): la API responde enseguida y el resultado
+// llega después como {"type": "claude", ok, error?, command?}.
+const claudeBtn = $("#claude-connect");
+claudeBtn.onclick = async () => {
+  claudeBtn.disabled = true;
+  claudeBtn.textContent = "Conectando…";
+  setErr("claude", "");
+  $("#claude-cmd").hidden = true;
+  const r = await api().connect_claude();
+  if (!r.pending) renderClaude(r);
+};
+function renderClaude(r) {
+  claudeBtn.disabled = false;
+  claudeBtn.textContent = "Conectar";
+  if (r.ok) {
+    toast(checked("Conectado. En Claude Code puedes pedir: «lee la última llamada con Acme y haz lo que acordamos»"), 7000);
+    return;
+  }
+  setErr("claude", r.error || "No se pudo conectar");
+  if (r.command) {
+    $("#claude-cmd-text").textContent = r.command;
+    $("#claude-cmd").hidden = false;
+  }
+}
+$("#claude-cmd-copy").onclick = async () => {
+  const res = await api().copy_claude_command();
+  toast(res.ok ? checked("Copiado al portapapeles") : esc(res.error || "No se pudo copiar"));
+};
+// La instrucción se guarda al salir del campo. Vacía, se usa la de por defecto (la pista).
+$("#claude-instruction").addEventListener("change", async (e) => {
+  const t = e.target;
+  if (!(await save("claude_instruction", t.value))) t.value = S.settings.claude_instruction ?? "";
+});
+
 // --- barra propia ---------------------------------------------------------
 $("#call-btn").onclick = async () => { const r = await api().toggle_call(); if (!r.ok) toast(esc(r.error)); };
 // --- actualizaciones -------------------------------------------------------
 function renderUpdate(u) {
   const text = $("#upd-text"), check = $("#upd-check"), inst = $("#upd-install");
   const note = $("#upd-note"), noteSub = $("#upd-note-sub"), noteBtn = $("#upd-note-btn");
+  // la búsqueda automática solo existe en la versión instalada
+  $('[data-setting="auto_update_check"]').disabled = !u;
   if (!u) {  // versión de desarrollo
     text.textContent = "Solo en la versión instalada";
     check.disabled = true; inst.hidden = true; note.hidden = true;

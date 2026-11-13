@@ -430,6 +430,17 @@ mod tests {
         );
     }
 
+    /// La pista del campo de la instrucción es la instrucción que se usa si se deja vacío.
+    #[test]
+    fn test_instruction_placeholder_is_the_default() {
+        let html = include_str!("../web/index.html");
+        let placeholder = format!(
+            "placeholder=\"{}\"",
+            anotalo_core::config::DEFAULT_CLAUDE_INSTRUCTION
+        );
+        assert!(html.contains(&placeholder));
+    }
+
     #[test]
     fn test_mark_hotkey_must_differ_from_record() {
         assert_eq!(
@@ -585,6 +596,14 @@ mod tests {
             prints_dir: d.path().join("huellas"),
             diagnostics: Box::new(String::new),
             version: "0.0.0-test".into(),
+            updater: None,
+            claude: anotalo_core::ui_api::ClaudeCode {
+                name: "anotalo-dev".into(),
+                exe: "Anotalo.exe".into(),
+                find: Box::new(|| None),
+                run: Box::new(|_, _| Err("sin claude en este test".into())),
+            },
+            page_event: Box::new(|_| {}),
         }));
         let count = ui
             .list_recordings("all", "", None)
@@ -626,6 +645,7 @@ mod tests {
                 client: document.querySelector("#client-btn")?.textContent.trim() ?? null,
                 people: texts(".person[data-name]"),
                 marks: texts(".line.marked .ts"),
+                actions: texts("#detail .actions .btn").filter(Boolean),
             }] }));
         })();"##;
         let has = |method: &str| seen.borrow().iter().any(|v| v["method"] == method);
@@ -661,6 +681,7 @@ mod tests {
                 "client": "Acme",
                 "people": ["María", "Persona 1"],
                 "marks": ["00:00:05"],
+                "actions": ["Copiar", "Copiar para Claude", "Descargar .md"],
             })
         );
     }

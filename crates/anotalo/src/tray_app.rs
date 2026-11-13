@@ -1238,6 +1238,12 @@ pub fn run() -> ExitCode {
             Box::new(move || diagnostics::collect(&log, live_audio))
         },
         version: env!("CARGO_PKG_VERSION").into(),
+        updater: updater.clone(),
+        claude: crate::claude_code::deps(profile),
+        page_event: {
+            let c = calls.clone();
+            Box::new(move |v| c.post(move |sh: &Shell| sh.page(&v)))
+        },
     }));
     let (reply_tx, replies) = mpsc::channel::<Reply>();
     let bridge = Rc::new(Bridge::new(

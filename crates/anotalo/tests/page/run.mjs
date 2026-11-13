@@ -294,6 +294,84 @@ await check("Ajustes: General con «Copiar diagnóstico» al final y Anotalo con
   await shot("09-settings-general");
 });
 
+await check("detalle: «Copiar para Claude» junto a Copiar", async () => {
+  await page.click('.nav[data-view="recordings"]');
+  await page.click(`.item[data-id="${ACME}"]`);
+  await until(async () => (await page.$("#act-claude")) && (await text(".dhead h2")) === "Llamada de Teams", "detalle de Acme");
+  eq(await texts(".dhead .actions .btn"), ["Copiar", "Copiar para Claude", "Descargar .md", ""], "botones del detalle");
+  eq(await page.getAttribute("#act-claude", "title"), "Copia la transcripción con tu instrucción, para pegarla en Claude", "pista");
+  await page.click("#act-claude");
+  await until(async () => (await text("#toast")) === "Copiado para Claude", "aviso «Copiado para Claude»");
+  eq(await calls("copy_for_claude"), [[ACME]], "copy_for_claude");
+  await shot("11-copy-for-claude");
+});
+
+await check("General en desarrollo: actualizaciones desactivadas, y la tarjeta de Claude Code", async () => {
+  await page.click('.nav[data-view="general"]');
+  await until(() => page.isVisible("#claude-connect"), "botón Conectar");
+  eq(await text("#upd-text"), "Solo en la versión instalada", "texto de la versión");
+  eq(await page.isDisabled("#upd-check"), true, "Buscar actualizaciones desactivado");
+  const auto = '[data-setting="auto_update_check"]';
+  eq(await page.isDisabled(auto), true, "el interruptor no se puede cambiar en desarrollo");
+  eq(await page.$eval(auto, (b) => b.closest(".set").querySelector("b").textContent), "Buscar actualizaciones automáticamente", "nombre del interruptor");
+  eq(await page.$eval(auto, (b) => b.closest(".set").querySelector(".l span").textContent), "Al abrir la app y cada 6 horas.", "descripción");
+  eq(await page.$eval(auto, (b) => b.closest(".card").querySelector(".ch").textContent), "Actualizaciones", "en su tarjeta");
+  const card = await page.$eval("#claude-connect", (b) => b.closest(".card").querySelector(".ch").textContent);
+  eq(card, "Claude Code", "tarjeta de Claude Code");
+  eq(await page.$eval("#claude-connect", (b) => b.closest(".set").querySelector("b").textContent), "Conectar con Claude Code", "fila de conectar");
+  eq(await page.$eval("#claude-connect", (b) => b.closest(".set").querySelector(".l span").textContent),
+    "Claude Code podrá leer tus llamadas cuando se lo pidas (solo lectura).", "descripción de conectar");
+  eq(await text("#claude-connect"), "Conectar", "botón");
+  eq(await page.isVisible("#claude-cmd"), false, "sin orden hasta que falle");
+  const inst = await page.evaluate(() => window.__fake.INSTRUCTION);
+  eq(await page.getAttribute("#claude-instruction", "placeholder"), inst, "la de por defecto como pista");
+  eq(await page.inputValue("#claude-instruction"), inst, "la instrucción guardada");
+  eq(await page.getAttribute("#claude-instruction", "maxlength"), "2000", "como mucho 2000 caracteres");
+  eq(await page.$eval("#claude-instruction", (t) => t.closest(".set").querySelector("b").textContent), "Instrucción para «Copiar para Claude»", "nombre de la instrucción");
+  eq((await texts("#view-general .card .ch")).slice(-2), ["Claude Code", "Acerca de"], "Claude Code antes de Acerca de");
+  await page.$eval("#claude-connect", (b) => b.scrollIntoView());
+  await shot("12-general-claude-dev");
+});
+
+await check("Conectar con Claude Code sin claude: el error y la orden para copiarla", async () => {
+  await page.click("#claude-connect");
+  await until(() => page.isDisabled("#claude-connect"), "botón ocupado");
+  eq(await text("#claude-connect"), "Conectando…", "texto mientras conecta");
+  await page.click("#claude-connect", { force: true });  // otro clic no lanza otra conexión
+  await until(() => page.isVisible("#claude-cmd"), "la orden");
+  eq(await text('[data-err="claude"]'), "No encontré Claude Code (el comando claude) en este PC.", "error");
+  eq(await text("#claude-cmd-text"), await page.evaluate(() => window.__fake.COMMAND), "orden");
+  eq(await page.isDisabled("#claude-connect"), false, "se puede reintentar");
+  eq(await text("#claude-connect"), "Conectar", "texto de vuelta");
+  eq((await calls("connect_claude")).length, 1, "una sola conexión");
+  await page.click("#claude-cmd-copy");
+  await until(async () => (await text("#toast")) === "Copiado al portapapeles", "aviso de copia");
+  eq((await calls("copy_claude_command")).length, 1, "copy_claude_command");
+  await shot("13-claude-not-found");
+});
+
+await check("Conectar con Claude Code: conectado", async () => {
+  await page.evaluate(() => { window.__fake.claudeOutcome = { ok: true }; });
+  await page.click("#claude-connect");
+  await until(async () => (await text("#toast")).startsWith("Conectado."), "aviso de conectado");
+  eq(await text("#toast"), "Conectado. En Claude Code puedes pedir: «lee la última llamada con Acme y haz lo que acordamos»", "aviso");
+  eq(await page.isVisible("#claude-cmd"), false, "sin la orden");
+  eq(await text('[data-err="claude"]'), "", "sin error");
+  await shot("14-claude-connected");
+});
+
+await check("la instrucción se guarda al salir del campo; vacía, la de por defecto", async () => {
+  await page.fill("#claude-instruction", "Resume en tres puntos");
+  await page.click("#view-general h1");
+  await until(async () => (await calls("set_setting")).some(([k]) => k === "claude_instruction"), "guardada al salir");
+  eq((await calls("set_setting")).filter(([k]) => k === "claude_instruction"), [["claude_instruction", "Resume en tres puntos"]], "set_setting");
+  await page.fill("#claude-instruction", "");
+  await page.click("#view-general h1");
+  await until(async () => (await calls("set_setting")).filter(([k]) => k === "claude_instruction").length === 2, "vacía guardada");
+  eq((await calls("set_setting")).filter(([k]) => k === "claude_instruction").at(-1), ["claude_instruction", ""], "vacía");
+  eq(await page.inputValue("#claude-instruction"), "", "queda vacía (se ve la de por defecto)");
+});
+
 await check("tamaño mínimo (940×600): el detalle no se desborda", async () => {
   await page.setViewportSize({ width: 930, height: 590 });
   await page.click('.nav[data-view="recordings"]');
@@ -306,6 +384,57 @@ await check("tamaño mínimo (940×600): el detalle no se desborda", async () =>
 });
 
 await check("sin errores en la consola, peticiones fallidas ni órdenes desconocidas", async () => {
+  const fake = await page.evaluate(() => ({
+    unknown: window.__fake.unknown,
+    logs: window.__fake.calls.filter(([m, a]) => m === "log_js" && a[0] !== "ready").map(([, a]) => a[0]),
+  }));
+  eq(fake.unknown, [], "órdenes desconocidas");
+  eq(fake.logs, [], "errores enviados con log_js");
+  eq(problems, [], "consola y red");
+});
+
+// --- la versión instalada (con actualizador) ------------------------------------
+await page.setViewportSize({ width: 1110, height: 710 });
+await page.goto(`${ORIGIN}index.html?installed`);
+const upd = (u) => page.evaluate((u) => window.onEvent({ type: "update", ...window.__fake.update, ...u }), u);
+
+await check("instalada: buscar, disponible, actualizar, descargando, reintentar", async () => {
+  await until(async () => (await page.$$(".item")).length > 0, "la lista");
+  await page.click('.nav[data-view="general"]');
+  await until(async () => (await text("#upd-text")) === "Tienes la versión 1.0.0-alpha.2.", "versión actual");
+  eq(await page.isDisabled("#upd-check"), false, "Buscar actualizaciones activo");
+  eq(await page.isDisabled('[data-setting="auto_update_check"]'), false, "interruptor activo");
+  eq(await page.isVisible("#upd-install"), false, "sin Actualizar");
+  eq(await text("#version"), "Versión 1.0.0-alpha.2", "sin «desarrollo»");
+  await page.click("#upd-check");
+  await until(async () => (await calls("check_updates")).length === 1, "check_updates");
+  await upd({ state: "checking" });
+  await until(async () => (await text("#upd-text")) === "Buscando actualizaciones…", "buscando");
+  eq(await page.isDisabled("#upd-check"), true, "no se busca dos veces");
+  await upd({ state: "available", version: "1.0.0-alpha.3" });
+  await until(async () => (await text("#upd-text")) === "Versión 1.0.0-alpha.3 disponible.", "disponible");
+  eq(await text("#upd-install"), "Actualizar", "botón Actualizar");
+  eq(await page.isVisible("#upd-note"), true, "aviso en la barra lateral");
+  eq(await text("#upd-note-title"), "Versión 1.0.0-alpha.3 disponible", "título del aviso");
+  await shot("15-update-available");
+  await page.click("#upd-install");
+  await until(async () => (await calls("install_update")).length === 1, "install_update");
+  await upd({ state: "downloading", version: "1.0.0-alpha.3", progress: 0.42 });
+  await until(async () => (await text("#upd-text")) === "Descargando la versión 1.0.0-alpha.3… 42 %", "descargando");
+  eq(await page.isVisible("#upd-install"), false, "sin Actualizar mientras descarga");
+  await upd({ state: "waiting", version: "1.0.0-alpha.3" });
+  await until(async () => (await text("#upd-text")) === "La versión 1.0.0-alpha.3 se instalará al terminar la grabación.", "esperando");
+  await upd({ state: "error", version: "1.0.0-alpha.3", error: "La instalación no se completó. Vuelve a intentarlo." });
+  await until(async () => (await text("#upd-install")) === "Reintentar", "Reintentar");
+  eq(await text('[data-err="update"]'), "La instalación no se completó. Vuelve a intentarlo.", "error");
+  await page.click("#upd-note-btn");
+  await until(async () => (await calls("install_update")).length === 2, "reintentar desde la barra lateral");
+  await page.click('[data-setting="auto_update_check"]');
+  await until(async () => (await calls("set_setting")).some(([k, v]) => k === "auto_update_check" && v === false), "apagar la búsqueda automática");
+  eq(await page.getAttribute('[data-setting="auto_update_check"]', "aria-checked"), "false", "interruptor apagado");
+});
+
+await check("instalada: sin errores ni órdenes desconocidas", async () => {
   const fake = await page.evaluate(() => ({
     unknown: window.__fake.unknown,
     logs: window.__fake.calls.filter(([m, a]) => m === "log_js" && a[0] !== "ready").map(([, a]) => a[0]),

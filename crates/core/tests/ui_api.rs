@@ -5,17 +5,21 @@ mod common {
 }
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use anotalo_core::app::CALL_LABEL;
-use anotalo_core::config::Settings;
+use anotalo_core::claude::display_command;
+use anotalo_core::config::{DEFAULT_CLAUDE_INSTRUCTION, Settings};
 use anotalo_core::hotkey::validate_hotkey;
+use anotalo_core::notify::Notifier;
 use anotalo_core::paths::Profile;
 use anotalo_core::speaker::diarizer::CallVoice;
 use anotalo_core::speaker::memory::VoiceStore;
 use anotalo_core::speaker::naming::{CallPrints, call_prints_path, save_call_prints};
-use anotalo_core::ui_api::{UiApi, UiDeps, WindowControl};
+use anotalo_core::ui_api::{ClaudeCode, UiApi, UiDeps, WindowControl};
+use anotalo_core::updater::{Release, UpdateDeps, UpdateManager};
 use chrono::NaiveDate;
 use common::app::{Harness, harness_with};
 use common::speaker::basis;
@@ -68,6 +72,48 @@ impl WindowControl for FakeWindow {
     }
 }
 
+/// `claude` de mentira: dónde "está", qué responde `mcp add` y qué se le pidió. Con `hold`, cada
+/// ejecución espera hasta que se suelte (para ver que la página no se queda esperando).
+#[derive(Default)]
+struct FakeClaude {
+    found: Mutex<Option<PathBuf>>,
+    /// La respuesta a `mcp add` (None = código 0 sin salida).
+    add: Mutex<Option<Result<(i32, String), String>>>,
+    runs: Mutex<Vec<(PathBuf, Vec<String>)>>,
+    hold: AtomicBool,
+}
+
+const CLAUDE_NAME: &str = "anotalo-dev";
+const EXE: &str = r"C:\Users\Ana María\Anotalo\Anotalo.exe";
+
+impl FakeClaude {
+    fn code(self: &Arc<Self>) -> ClaudeCode {
+        let (f, r) = (self.clone(), self.clone());
+        ClaudeCode {
+            name: CLAUDE_NAME.into(),
+            exe: PathBuf::from(EXE),
+            find: Box::new(move || f.found.lock().unwrap().clone()),
+            run: Box::new(move |exe, args| {
+                while r.hold.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                r.runs
+                    .lock()
+                    .unwrap()
+                    .push((exe.to_path_buf(), args.to_vec()));
+                if args[1] == "remove" {
+                    return Ok((1, "no existe".into()));
+                }
+                r.add
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap_or(Ok((0, String::new())))
+            }),
+        }
+    }
+}
+
 struct Env {
     api: UiApi,
     h: Harness,
@@ -79,6 +125,9 @@ struct Env {
     live: Arc<Mutex<Option<String>>>,
     capture: Arc<Mutex<Vec<bool>>>,
     window: Arc<FakeWindow>,
+    /// Lo que la API avisó a la página.
+    events: Arc<Mutex<Vec<Value>>>,
+    claude: Arc<FakeClaude>,
 }
 
 impl Env {
@@ -100,9 +149,18 @@ fn env() -> Env {
     env_with(|_| {}, "")
 }
 
-/// La carpeta con una llamada y una nota, una app de prueba que graba en ella y hoy = 23 oct 2026.
-/// El atajo se valida como en la app (lo hace su aplicador).
 fn env_with(edit: impl FnOnce(&mut Settings), diagnostics: &str) -> Env {
+    env_from(edit, diagnostics, None)
+}
+
+/// La carpeta con una llamada y una nota, una app de prueba que graba en ella y hoy = 23 oct 2026.
+/// El atajo se valida como en la app (lo hace su aplicador). Sin `updater` es la versión de
+/// desarrollo.
+fn env_from(
+    edit: impl FnOnce(&mut Settings),
+    diagnostics: &str,
+    updater: Option<Arc<UpdateManager>>,
+) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join(TEAMS), CALL).unwrap();
@@ -131,6 +189,9 @@ fn env_with(edit: impl FnOnce(&mut Settings), diagnostics: &str) -> Env {
         capture.clone(),
     );
     let diagnostics = diagnostics.to_string();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let claude = Arc::new(FakeClaude::default());
+    let ev = events.clone();
     let api = UiApi::new(UiDeps {
         app: h.app.clone(),
         live_id: Box::new(move || lv.lock().unwrap().clone()),
@@ -148,6 +209,9 @@ fn env_with(edit: impl FnOnce(&mut Settings), diagnostics: &str) -> Env {
         prints_dir: data.path().join("llamadas"),
         diagnostics: Box::new(move || diagnostics.clone()),
         version: "9.9.9-test".into(),
+        updater,
+        claude: claude.code(),
+        page_event: Box::new(move |v| ev.lock().unwrap().push(v)),
     });
     Env {
         api,
@@ -160,6 +224,20 @@ fn env_with(edit: impl FnOnce(&mut Settings), diagnostics: &str) -> Env {
         live,
         capture,
         window,
+        events,
+        claude,
+    }
+}
+
+/// Espera (como mucho 5 s) a que `f` dé algo.
+fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(v) = f() {
+            return v;
+        }
+        assert!(Instant::now() < end, "no llegó: {what}");
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -437,15 +515,247 @@ fn test_manual_call_shows_as_manual() {
     assert!(rec["kind"] == "call" && rec["app"] == "Manual");
 }
 
-/// Sin actualizador hasta M4 (en Python delegaba en él): en cualquier versión responden
-/// "Solo en la versión instalada", sin bloquear, y el estado no trae actualización.
+/// La versión de desarrollo no tiene actualizador: "Solo en la versión instalada" y el estado no
+/// trae actualización.
 #[test]
-fn test_api_update_methods_delegate() {
+fn test_update_commands_in_dev() {
     let e = env();
     let only = json!({"ok": false, "error": "Solo en la versión instalada"});
     assert_eq!(e.api.call("check_updates", &[]), only);
     assert_eq!(e.api.call("install_update", &[]), only);
-    assert_eq!(e.api.get_state()["update"], Value::Null);
+    assert_eq!(e.api.call("get_state", &[])["update"], Value::Null);
+}
+
+struct Quiet;
+
+impl Notifier for Quiet {
+    fn notify(&self, _: &str, _: &str, _: Option<&Path>) {}
+}
+
+/// Un actualizador de mentira (nada se descarga ni se ejecuta): la comprobación espera a que se
+/// abra `gate` y encuentra la 9.9.10; "lanzar" el instalador solo lo apunta en `launched`.
+fn fake_updater(
+    gate: Arc<(Mutex<bool>, Condvar)>,
+    launched: Arc<Mutex<Vec<PathBuf>>>,
+) -> Arc<UpdateManager> {
+    UpdateManager::new(UpdateDeps {
+        current: "9.9.9".into(),
+        is_recording: Box::new(|| false),
+        notifier: Arc::new(Quiet),
+        on_change: Box::new(|_| {}),
+        set_updating: Box::new(|_| {}),
+        fetch: Box::new(move || {
+            let (open, cv) = &*gate;
+            let _g = cv.wait_while(open.lock().unwrap(), |o| !*o).unwrap();
+            Ok(Some(Release {
+                version: "9.9.10".into(),
+                title: "Anotalo 9.9.10".into(),
+                url: "https://github.com/LukiMesa/anotalo/releases/download/v9.9.10/Anotalo-Setup-9.9.10.exe".into(),
+                name: "Anotalo-Setup-9.9.10.exe".into(),
+                size: 5,
+                sha256: "00".into(),
+            }))
+        }),
+        download: Box::new(|rel, _| Ok(PathBuf::from(r"C:\no-existe").join(&rel.name))),
+        launch: Box::new(move |p| {
+            launched.lock().unwrap().push(p.to_path_buf());
+            Ok(())
+        }),
+        notified_version: String::new(),
+        on_notified: Box::new(|_| {}),
+        install_timeout: Duration::from_secs(600),
+    })
+}
+
+/// La versión instalada: buscar e instalar delegan en el actualizador en otro hilo (la respuesta
+/// no espera a la red) y el estado trae su foto.
+#[test]
+fn test_update_commands_delegate_without_waiting() {
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let e = env_from(
+        |_| {},
+        "",
+        Some(fake_updater(gate.clone(), launched.clone())),
+    );
+    assert_eq!(e.api.get_state()["update"]["state"], "idle");
+    assert_eq!(e.api.call("check_updates", &[]), ok()); // la comprobación sigue esperando
+    wait_for("comprobando", || {
+        (e.api.get_state()["update"]["state"] == "checking").then_some(())
+    });
+    *gate.0.lock().unwrap() = true;
+    gate.1.notify_all();
+    wait_for("disponible", || {
+        (e.api.get_state()["update"]["state"] == "available").then_some(())
+    });
+    assert_eq!(e.api.get_state()["update"]["version"], "9.9.10");
+    assert_eq!(e.api.call("install_update", &[]), ok());
+    let path = wait_for("instalador lanzado", || {
+        launched.lock().unwrap().first().cloned()
+    });
+    assert_eq!(path, Path::new(r"C:\no-existe\Anotalo-Setup-9.9.10.exe"));
+    assert_eq!(e.api.get_state()["update"]["state"], "installing");
+}
+
+#[test]
+fn test_copy_for_claude_uses_the_instruction() {
+    let e = env();
+    assert_eq!(
+        e.api.call(
+            "set_setting",
+            &[json!("claude_instruction"), json!("Haz X")]
+        ),
+        ok()
+    );
+    assert_eq!(e.api.call("copy_for_claude", &[json!(TEAMS)]), ok());
+    let copied = e.copied.lock().unwrap().last().cloned().unwrap();
+    assert!(
+        copied.starts_with(&format!(
+            "Haz X\n\n<transcripcion archivo=\"{TEAMS}\">\nLlamada: Teams — 2026-10-23 15:04"
+        )),
+        "{copied}"
+    );
+    assert!(copied.ends_with("[00:00:09] Otros: Necesito cambiar el botón.\n</transcripcion>"));
+    assert_eq!(
+        e.api.call("copy_for_claude", &[json!("../x.md")])["ok"],
+        false
+    );
+    assert_eq!(
+        e.api.call("copy_for_claude", &[json!("nada.md")]),
+        json!({"ok": false, "error": "La grabación ya no existe"})
+    );
+    // en blanco, la de por defecto
+    e.api.set_setting("claude_instruction", json!("  "));
+    e.api.copy_for_claude(NOTA);
+    let copied = e.copied.lock().unwrap().last().cloned().unwrap();
+    assert!(copied.starts_with(&format!(
+        "{DEFAULT_CLAUDE_INSTRUCTION}\n\n<transcripcion archivo=\"{NOTA}\">\nNota rápida"
+    )));
+}
+
+#[test]
+fn test_instruction_length_is_limited() {
+    let e = env();
+    assert_eq!(
+        e.api.call(
+            "set_setting",
+            &[json!("claude_instruction"), json!("a".repeat(2001))]
+        ),
+        json!({"ok": false, "error": "La instrucción es demasiado larga (máximo 2000 caracteres)"})
+    );
+    assert_eq!(
+        e.api
+            .set_setting("claude_instruction", json!("ñ".repeat(2000))),
+        ok()
+    );
+    assert_eq!(e.h.app.settings().claude_instruction, "ñ".repeat(2000));
+    assert_eq!(
+        e.api.set_setting("claude_instruction", json!(5))["ok"],
+        false
+    );
+    // los dos ajustes nuevos se leen y se cambian desde la ventana
+    assert_eq!(e.api.set_setting("auto_update_check", json!(false)), ok());
+    let s = e.api.get_settings();
+    assert_eq!(s["auto_update_check"], false);
+    assert_eq!(s["claude_instruction"], "ñ".repeat(2000));
+}
+
+/// "Conectar con Claude Code" responde enseguida y avisa del resultado a la página: quitar y
+/// añadir el servidor, o qué falló y la orden para escribirla a mano.
+#[test]
+fn test_connect_claude_answers_by_event() {
+    let e = env();
+    let command = display_command(CLAUDE_NAME, Path::new(EXE));
+    let next_event = |n: usize| {
+        wait_for("aviso de Claude", || {
+            e.events.lock().unwrap().get(n).cloned()
+        })
+    };
+
+    // sin `claude` en este PC
+    assert_eq!(
+        e.api.call("connect_claude", &[]),
+        json!({"ok": true, "pending": true})
+    );
+    assert_eq!(
+        next_event(0),
+        json!({"type": "claude", "ok": false, "command": command,
+               "error": "No encontré Claude Code (el comando claude) en este PC."})
+    );
+    assert!(e.claude.runs.lock().unwrap().is_empty());
+
+    // conecta: quita (da igual que falle) y añade
+    let claude = PathBuf::from(r"C:\Users\a\.local\bin\claude.exe");
+    *e.claude.found.lock().unwrap() = Some(claude.clone());
+    e.api.connect_claude();
+    assert_eq!(next_event(1), json!({"type": "claude", "ok": true}));
+    let runs = e.claude.runs.lock().unwrap().clone();
+    assert_eq!(
+        runs,
+        [
+            (
+                claude.clone(),
+                ["mcp", "remove", "--scope", "user", CLAUDE_NAME]
+                    .map(String::from)
+                    .to_vec()
+            ),
+            (
+                claude.clone(),
+                [
+                    "mcp",
+                    "add",
+                    "--scope",
+                    "user",
+                    CLAUDE_NAME,
+                    "--",
+                    EXE,
+                    "mcp"
+                ]
+                .map(String::from)
+                .to_vec()
+            ),
+        ]
+    );
+
+    // Claude Code responde con un error
+    *e.claude.add.lock().unwrap() = Some(Ok((1, "boom\n".into())));
+    e.api.connect_claude();
+    assert_eq!(
+        next_event(2),
+        json!({"type": "claude", "ok": false, "command": command,
+               "error": "Claude Code respondió con un error: boom"})
+    );
+}
+
+/// Pulsar "Conectar" otra vez mientras se conecta no lanza otra conexión.
+#[test]
+fn test_connect_claude_runs_one_at_a_time() {
+    let e = env();
+    *e.claude.found.lock().unwrap() = Some(PathBuf::from("claude.exe"));
+    e.claude.hold.store(true, Ordering::SeqCst);
+    let pending = json!({"ok": true, "pending": true});
+    assert_eq!(e.api.connect_claude(), pending);
+    assert_eq!(e.api.connect_claude(), pending);
+    e.claude.hold.store(false, Ordering::SeqCst);
+    wait_for("conectado", || e.events.lock().unwrap().first().cloned());
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(e.events.lock().unwrap().len(), 1);
+    assert_eq!(e.claude.runs.lock().unwrap().len(), 2, "un remove y un add");
+    // terminada, se puede volver a conectar
+    e.api.connect_claude();
+    wait_for("otra vez", || e.events.lock().unwrap().get(1).cloned());
+}
+
+#[test]
+fn test_claude_command_and_copy() {
+    let e = env();
+    let command = display_command(CLAUDE_NAME, Path::new(EXE));
+    assert_eq!(
+        e.api.call("claude_command", &[]),
+        json!({"command": command})
+    );
+    assert_eq!(e.api.call("copy_claude_command", &[]), ok());
+    assert_eq!(*e.copied.lock().unwrap(), [command]);
 }
 
 #[test]

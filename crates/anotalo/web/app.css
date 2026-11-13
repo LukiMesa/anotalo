@@ -111,7 +111,7 @@ h1 { font-family: var(--font-display); font-weight: 600; font-size: 22px; letter
 .dhead > div:first-child { min-width: 0; }
 .dhead h2 { font-family: var(--font-display); font-weight: 600; font-size: 18px; margin: 0; }
 .meta { display: flex; flex-wrap: wrap; gap: 4px 14px; white-space: nowrap; margin-top: 6px; font-family: var(--font-mono); font-size: 11.5px; color: var(--acero-oscuro); }
-.actions { display: flex; gap: 8px; margin-left: auto; }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-left: auto; min-width: 0; }
 .btn { white-space: nowrap; height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--surface-raised); font-size: 13px; font-weight: 600; transition: background var(--duration-fast), border-color var(--duration-fast), transform var(--duration-fast); }
 .btn:hover { border-color: var(--line-strong); }
 .btn:active { transform: scale(.97); }
@@ -188,6 +188,14 @@ mark { background: rgba(46,197,230,.18); color: var(--ink); border-radius: 3px; 
 .cnote { margin: 0; padding: 4px 18px 14px; font-size: 13px; line-height: 19px; color: var(--ink-muted); }
 .set.voice { padding-top: 10px; padding-bottom: 10px; gap: 8px; }
 .set.voice .l b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switch[disabled] { opacity: .45; cursor: not-allowed; }
+/* Claude Code: la orden para escribirla a mano (si conectar falla) y la instrucción */
+.cmd { display: flex; align-items: center; gap: 10px; margin: -4px 18px 14px; padding: 8px 8px 8px 12px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--surface-sunken); }
+.cmd[hidden] { display: none; }
+.cmd code { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12px; line-height: 18px; color: var(--ink); word-break: break-all; user-select: text; }
+.set.stack { flex-direction: column; align-items: stretch; gap: 8px; }
+.area { width: 100%; min-height: 76px; padding: 9px 12px; resize: vertical; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--surface-sunken); color: var(--ink); font: inherit; font-size: 13px; line-height: 19px; }
+.area::placeholder { color: var(--acero-oscuro); }
 /* diagnóstico: discreto, al final de General */
 .diag { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 4px 0 0 4px; font-size: 12.5px; color: var(--acero-oscuro); }
 .link { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; margin-left: -8px; border: 0; border-radius: 8px; background: none; color: var(--ink-muted); font-size: 12.5px; font-weight: 600; transition: background var(--duration-fast), color var(--duration-fast); }
