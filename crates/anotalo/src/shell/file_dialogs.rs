@@ -13,8 +13,12 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::{HSTRING, Interface, w};
 
-/// La ruta elegida en un diálogo ya mostrado; None si se canceló o falló.
+use super::main_window::PerMonitorDpi;
+
+/// La ruta elegida en un diálogo ya mostrado; None si se canceló o falló. El diálogo es
+/// "consciente del DPI por monitor" (nítido a 150 %), como la ventana que es su dueña.
 fn result(dialog: &IFileDialog, owner: HWND) -> Option<PathBuf> {
+    let _dpi = PerMonitorDpi::enter();
     // SAFETY: COM en el hilo principal; la cadena devuelta se libera con CoTaskMemFree.
     unsafe {
         if let Err(e) = dialog.Show(Some(owner)) {

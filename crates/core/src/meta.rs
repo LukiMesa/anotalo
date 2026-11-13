@@ -45,9 +45,7 @@ pub fn set_client(md: &Path, client: &str) -> Result<(), String> {
     if out == text {
         return Ok(());
     }
-    let tmp = md.with_extension("md.tmp");
-    fs::write(&tmp, out)
-        .and_then(|()| fs::rename(&tmp, md))
+    crate::atomic::replace_file(md, out.as_bytes())
         .map_err(|e| format!("No se pudo guardar {file}: {e}"))
 }
 

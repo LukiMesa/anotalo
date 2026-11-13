@@ -38,6 +38,7 @@ const fold = (s) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase();
 function highlight(text, q) {
   if (!q) return esc(text);
   const f = fold(text), fq = fold(q);
+  if (!fq) return esc(text); // solo tildes sueltas: nada que resaltar (y no se repite sin fin)
   let out = "", i = 0, j;
   while ((j = f.indexOf(fq, i)) !== -1) {
     out += esc(text.slice(i, j)) + "<mark>" + esc(text.slice(j, j + q.length)) + "</mark>";

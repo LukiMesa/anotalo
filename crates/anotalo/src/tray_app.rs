@@ -49,9 +49,9 @@ use windows::Win32::System::Shutdown::{ShutdownBlockReasonCreate, ShutdownBlockR
 use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    ENDSESSION_CRITICAL, KillTimer, PostQuitMessage, SW_SHOWNORMAL, SetTimer, WM_COMMAND,
-    WM_CONTEXTMENU, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONUP, WM_QUERYENDSESSION, WM_RBUTTONUP,
-    WM_TIMER,
+    ASFW_ANY, AllowSetForegroundWindow, ENDSESSION_CRITICAL, KillTimer, PostQuitMessage,
+    SW_SHOWNORMAL, SetTimer, WM_COMMAND, WM_CONTEXTMENU, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONUP,
+    WM_QUERYENDSESSION, WM_RBUTTONUP, WM_TIMER,
 };
 use windows::core::{HSTRING, w};
 
@@ -68,7 +68,8 @@ use crate::shell::window::{
 };
 use crate::ui_bridge::{Bridge, Reply, event_js, reply_js};
 use crate::ui_wiring::{
-    MainCalls, NO_WINDOW_TITLE, PageCtx, check_hotkey, device_label, no_window_body, page_event,
+    HotkeyPause, MainCalls, NO_WINDOW_TITLE, PageCtx, capture_hook, check_hotkey, device_label,
+    no_window_body, page_event,
 };
 use crate::voices_cli::prints_dir;
 
@@ -694,7 +695,9 @@ impl Shell {
             Err(_) => Err("No se pudo cambiar el atajo ahora; inténtalo otra vez".into()),
         }
     }
+}
 
+impl HotkeyPause for Shell {
     /// Suelta (true) o devuelve (false) los atajos mientras la ventana captura uno nuevo.
     fn pause_hotkeys(&self, on: bool) {
         if let Ok(mut h) = self.hotkeys.try_borrow_mut()
@@ -707,7 +710,9 @@ impl Shell {
             }
         }
     }
+}
 
+impl Shell {
     /// Crea la ventana principal. Sin WebView2 (o si falla) se avisa y la app sigue en la bandeja.
     fn open_window(&self, start_hidden: bool, bridge: Rc<Bridge>, saved: Option<[i32; 4]>) {
         let rect = initial_rect(saved.map(|[left, top, right, bottom]| RECT {
@@ -985,7 +990,8 @@ impl Handler for Shell {
 
 pub fn run() -> ExitCode {
     // Lanzada desde una terminal, el registro también sale por ella.
-    let from_terminal = crate::console::attach_parent();
+    // a la terminal solo con ANOTALO_CONSOLE=1 (si no, un Ctrl+C en ella cerraría la app)
+    let from_terminal = crate::console::attach_for_tray();
     let profile = paths::profile();
     let data = paths::data_dir(profile);
     if let Err(e) = std::fs::create_dir_all(&data).and_then(|()| applog::init(&data, from_terminal))
@@ -998,6 +1004,9 @@ pub fn run() -> ExitCode {
     let (mutex, show_event) = paths::instance_names(profile);
     let Some(_instance) = instance::acquire(mutex) else {
         log::info!("Ya hay una Anotalo abierta: se le avisa y se sale");
+        // que la otra pueda ponerse delante (si no, Windows la deja detrás del Explorador)
+        // SAFETY: sin punteros.
+        let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
         instance::signal_show(show_event);
         return ExitCode::SUCCESS;
     };
@@ -1157,17 +1166,7 @@ pub fn run() -> ExitCode {
             let (m, d, r) = (model.clone(), devices.clone(), r.clone());
             Box::new(move || device_text(&m, &d, &r.settings()))
         },
-        hotkey_capture: {
-            let c = calls.clone();
-            Box::new(move |on| {
-                if c.call(Some(MAIN_WAIT), move |sh: &Shell| sh.pause_hotkeys(on))
-                    .is_none()
-                {
-                    let what = if on { "soltar" } else { "devolver" };
-                    log::warn!("No se pudieron {what} los atajos a tiempo");
-                }
-            })
-        },
+        hotkey_capture: capture_hook(calls.clone(), MAIN_WAIT),
         window: Arc::new(WindowCalls(calls.clone())),
         voices_path: voices_path(profile),
         prints_dir: prints_dir(profile),

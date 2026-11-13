@@ -253,6 +253,32 @@ impl<T: 'static> MainCalls<T> {
     }
 }
 
+/// Quien suelta y devuelve los atajos globales (el hilo principal, su dueño).
+pub trait HotkeyPause {
+    fn pause_hotkeys(&self, on: bool);
+}
+
+/// El gancho de la captura de un atajo (`UiDeps::hotkey_capture`). Soltar los atajos espera al
+/// hilo principal como mucho `wait` (si no llega, no se sueltan: nunca tarde). Devolverlos se
+/// publica sin plazo y se hace en cuanto el hilo principal pueda: nunca se pierde.
+pub fn capture_hook<T: HotkeyPause + 'static>(
+    calls: Arc<MainCalls<T>>,
+    wait: Duration,
+) -> Box<dyn Fn(bool) + Send + Sync> {
+    Box::new(move |on| {
+        if on {
+            if calls
+                .call(Some(wait), |t: &T| t.pause_hotkeys(true))
+                .is_none()
+            {
+                log::warn!("No se pudieron soltar los atajos a tiempo");
+            }
+        } else {
+            calls.post(|t: &T| t.pause_hotkeys(false));
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +699,34 @@ mod tests {
         let seen = Seen::default();
         calls.run_pending(&seen);
         assert!(seen.borrow().is_empty());
+    }
+
+    /// Tras capturar un atajo, los atajos globales vuelven siempre: aunque el hilo principal tarde
+    /// (p. ej. cargando el modelo), devolverlos no se abandona como soltarlos.
+    #[test]
+    fn test_hotkeys_always_come_back_after_a_capture() {
+        struct Keys(RefCell<Vec<bool>>);
+        impl HotkeyPause for Keys {
+            fn pause_hotkeys(&self, on: bool) {
+                self.0.borrow_mut().push(on);
+            }
+        }
+        let calls: Arc<MainCalls<Keys>> = Arc::new(MainCalls::new(Box::new(|| {})));
+        let hook = capture_hook(calls.clone(), Duration::from_millis(50));
+        let keys = Keys(RefCell::default());
+        thread::scope(|s| {
+            let t = s.spawn(|| hook(true));
+            let end = Instant::now() + Duration::from_secs(5);
+            while !t.is_finished() && Instant::now() < end {
+                calls.run_pending(&keys);
+                thread::sleep(Duration::from_millis(2));
+            }
+        });
+        assert_eq!(*keys.0.borrow(), [true], "soltados");
+        // el hilo principal no atiende en el plazo: devolverlos espera su turno
+        thread::scope(|s| s.spawn(|| hook(false)).join().unwrap());
+        calls.run_pending(&keys);
+        assert_eq!(*keys.0.borrow(), [true, false], "devueltos");
     }
 
     /// Desde el propio hilo principal se esperaría a sí mismo: no se hace.

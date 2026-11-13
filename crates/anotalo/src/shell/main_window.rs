@@ -3,7 +3,7 @@
 //! Es una ventana Win32 propia del hilo principal, sin marco a la vista pero con el comportamiento
 //! del de Windows (animaciones de minimizar y maximizar, Snap, bordes para redimensionar: ver
 //! `frame.rs`). Dentro va la página en WebView2 a través de `wry`, como ventana hija que deja libre
-//! el borde fino para redimensionar. La página se sirve desde el exe (`anotalo://app/…`) y habla
+//! el borde fino para redimensionar. La página se sirve desde el exe (`anotalo://localhost/…`) y habla
 //! con Rust por `window.ipc` (ver `ui_bridge.rs` y `web/bridge.js`). Cerrarla solo la oculta.
 //! WebView2 se carga con nuestro cargador (`anotalo_winsys::webview2_loader`), no con el de
 //! Microsoft.
@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroIsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 
 use anotalo_core::paths;
 use anotalo_winsys::webview2_loader;
@@ -72,11 +73,12 @@ pub const MIN_SIZE: (i32, i32) = (940, 600);
 /// Fondo de la ventana y de la página mientras carga: #10141F.
 const BACKGROUND: (u8, u8, u8) = (0x10, 0x14, 0x1F);
 /// La página, servida desde el exe.
-pub const START_URL: &str = "anotalo://app/index.html";
+pub const START_URL: &str = "anotalo://localhost/index.html";
 const PROTOCOL: &str = "anotalo";
-/// Cómo la ve WebView2: wry convierte `anotalo://app/` en `https://anotalo.app/`. Con https el
-/// origen es seguro (portapapeles) y no le afecta el HSTS precargado del dominio `.app`.
-const PAGE_ORIGIN: &str = "https://anotalo.app/";
+/// Cómo la ve WebView2: wry convierte `anotalo://localhost/` en `https://anotalo.localhost/`, un
+/// origen seguro (portapapeles) que nunca sale a internet (`.localhost` no se resuelve fuera del
+/// equipo), a diferencia de un dominio de verdad.
+const PAGE_ORIGIN: &str = "https://anotalo.localhost/";
 
 mod assets {
     include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
@@ -134,7 +136,7 @@ fn asset(path: &str) -> Option<(&'static str, &'static [u8])> {
         .map(|(n, body)| (content_type(n), *body))
 }
 
-/// La respuesta a una petición `anotalo://app/<ruta>`.
+/// La respuesta a una petición `anotalo://localhost/<ruta>`.
 fn serve(uri: &str) -> Response<Cow<'static, [u8]>> {
     let path = uri
         .parse::<Uri>()
@@ -157,10 +159,10 @@ fn serve(uri: &str) -> Response<Cow<'static, [u8]>> {
 }
 
 /// El hilo, en modo "consciente del DPI por monitor" (v2) mientras viva.
-struct PerMonitorDpi(DPI_AWARENESS_CONTEXT);
+pub(crate) struct PerMonitorDpi(DPI_AWARENESS_CONTEXT);
 
 impl PerMonitorDpi {
-    fn enter() -> PerMonitorDpi {
+    pub(crate) fn enter() -> PerMonitorDpi {
         // SAFETY: cambia el modo del hilo; Drop lo deja como estaba.
         PerMonitorDpi(unsafe {
             SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
@@ -554,13 +556,25 @@ impl HasWindowHandle for Parent {
     }
 }
 
+/// Los datos de WebView2 (caché del motor): en `%LOCALAPPDATA%\Anotalo[-dev]\WebView2`, no en el
+/// perfil móvil (`%APPDATA%`), como pide Microsoft.
+fn webview_data_dir() -> PathBuf {
+    let data = paths::data_dir(paths::profile());
+    match (std::env::var_os("LOCALAPPDATA"), data.file_name()) {
+        (Some(local), Some(name)) => PathBuf::from(local).join(name).join("WebView2"),
+        _ => data.join("WebView2"),
+    }
+}
+
 fn build_webview(hwnd: HWND, on_ipc: Box<dyn Fn(String)>) -> Result<WebView, String> {
-    let mut context = WebContext::new(Some(paths::data_dir(paths::profile()).join("WebView2")));
+    let mut context = WebContext::new(Some(webview_data_dir()));
     let (r, g, b) = BACKGROUND;
     WebViewBuilder::new_with_web_context(&mut context)
         .with_background_color((r, g, b, 255))
         .with_devtools(cfg!(debug_assertions))
         .with_default_context_menus(cfg!(debug_assertions))
+        // sin F5, Ctrl+R, Ctrl+P ni Ctrl+F del navegador (como con pywebview)
+        .with_browser_accelerator_keys(cfg!(debug_assertions))
         .with_https_scheme(true)
         .with_custom_protocol(PROTOCOL.into(), |_id, request| {
             serve(&request.uri().to_string())
@@ -820,7 +834,7 @@ mod tests {
         assert_eq!(ok.status(), 200);
         assert_eq!(ok.headers()["content-type"], "text/html; charset=utf-8");
         assert_eq!(ok.headers()["cache-control"], "no-store");
-        assert_eq!(serve("anotalo://app/no-existe.js").status(), 404);
+        assert_eq!(serve("anotalo://localhost/no-existe.js").status(), 404);
     }
 
     /// Mueve los mensajes de este hilo hasta que `done` o pase `limit`.

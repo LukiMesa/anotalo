@@ -140,3 +140,23 @@ fn test_set_client_needs_a_header() {
     let missing = p.with_file_name("no-existe.md");
     assert!(set_client(&missing, "Acme").is_err());
 }
+
+/// Si no se puede cambiar el archivo (aquí, de solo lectura; en la vida real, OneDrive o un
+/// antivirus), queda como estaba y no se deja un `.md.tmp` en la carpeta de grabaciones.
+#[test]
+fn test_failed_save_leaves_no_tmp() {
+    let (d, p, original) = copy("transcript_rust_speakers.md");
+    let writable = std::fs::metadata(&p).unwrap().permissions();
+    let mut read_only = writable.clone();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&p, read_only).unwrap();
+    let e = set_client(&p, "Acme").unwrap_err();
+    std::fs::set_permissions(&p, writable).unwrap();
+    assert!(e.contains("No se pudo guardar"), "{e}");
+    assert_eq!(std::fs::read(&p).unwrap(), original);
+    let names: Vec<_> = std::fs::read_dir(d.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, [p.file_name().unwrap()], "sin restos");
+}

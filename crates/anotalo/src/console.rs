@@ -3,13 +3,14 @@
 //! lanzan: cmd.exe no pasa sus identificadores a un programa de ventanas, así que hay que
 //! engancharse a su consola.
 
+use std::ffi::OsStr;
 use std::fs::OpenOptions;
 use std::os::windows::io::IntoRawHandle;
 
 use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, GetHandleInformation, HANDLE};
 use windows::Win32::System::Console::{
     ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_HANDLE,
-    STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
+    STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCtrlHandler, SetStdHandle,
 };
 
 /// ¿Falta este identificador estándar? Falta si es nulo o no vale en este proceso (un programa de
@@ -71,4 +72,40 @@ pub fn attach_parent() -> bool {
         }
     }
     !missing(STD_OUTPUT_HANDLE) || !missing(STD_ERROR_HANDLE)
+}
+
+/// ¿La app de la bandeja escribe también en la terminal? Solo con `ANOTALO_CONSOLE=1` (para
+/// desarrollo): enganchada a una consola, Windows la cerraría con un Ctrl+C en esa terminal o al
+/// cerrarla, a mitad de una grabación.
+pub fn tray_wants_console(var: Option<&OsStr>) -> bool {
+    var.is_some_and(|v| v == "1")
+}
+
+/// Para la app de la bandeja: se engancha a la terminal solo si se pide, y entonces ignora Ctrl+C
+/// (cerrar la terminal sí la cierra: es solo para desarrollo). Devuelve si hay dónde escribir.
+pub fn attach_for_tray() -> bool {
+    if !tray_wants_console(std::env::var_os("ANOTALO_CONSOLE").as_deref()) {
+        return false;
+    }
+    let attached = attach_parent();
+    if attached {
+        // SAFETY: sin manejador: este proceso deja de atender Ctrl+C.
+        let _ = unsafe { SetConsoleCtrlHandler(None, true) };
+    }
+    attached
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// La app de la bandeja no se engancha a la terminal desde la que se abre (Ctrl+C o cerrar esa
+    /// terminal la cerrarían a mitad de una grabación), salvo que se pida con ANOTALO_CONSOLE=1.
+    #[test]
+    fn test_tray_stays_off_the_terminal_unless_asked() {
+        assert!(!tray_wants_console(None));
+        assert!(!tray_wants_console(Some(OsStr::new(""))));
+        assert!(!tray_wants_console(Some(OsStr::new("0"))));
+        assert!(tray_wants_console(Some(OsStr::new("1"))));
+    }
 }

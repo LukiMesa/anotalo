@@ -323,3 +323,24 @@ fn test_prune_removes_half_saved_prints() {
     assert_eq!(prune_call_prints(d.path(), KEEP_CALL_PRINTS), 1);
     assert!(!stale.exists() && fresh.exists());
 }
+
+/// Si no se puede cambiar el archivo, queda como estaba y sin `.md.tmp` al lado.
+#[test]
+fn test_rename_failure_leaves_no_tmp() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.md");
+    std::fs::write(&p, MD).unwrap();
+    let writable = std::fs::metadata(&p).unwrap().permissions();
+    let mut read_only = writable.clone();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&p, read_only).unwrap();
+    let e = rename_speaker(&p, "Persona 1", "María").unwrap_err();
+    std::fs::set_permissions(&p, writable).unwrap();
+    assert!(e.contains("No se pudo guardar"), "{e}");
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), MD);
+    let names: Vec<_> = std::fs::read_dir(d.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, [p.file_name().unwrap()], "sin restos");
+}

@@ -94,9 +94,7 @@ pub fn rename_speaker(md: &Path, from: &str, to: &str) -> Result<usize, String> 
     if n == 0 {
         return Err(format!("No hay líneas de «{from}» en {file}"));
     }
-    let tmp = md.with_extension("md.tmp");
-    fs::write(&tmp, out)
-        .and_then(|()| fs::rename(&tmp, md))
+    crate::atomic::replace_file(md, out.as_bytes())
         .map_err(|e| format!("No se pudo guardar {file}: {e}"))?;
     Ok(n)
 }

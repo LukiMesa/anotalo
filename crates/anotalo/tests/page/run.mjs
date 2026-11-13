@@ -178,6 +178,18 @@ await check("la búsqueda mira el texto, el título y el cliente", async () => {
   await until(async () => (await page.$$(".item")).length === 7, "sin búsqueda");
 });
 
+// una búsqueda que al quitar tildes queda vacía (una tilde suelta pegada) no cuelga la página
+await check("una búsqueda solo de tildes sueltas no cuelga la página", () => Promise.race([
+  (async () => {
+    await page.fill("#q", "́");
+    await sleep(300);
+    await page.evaluate(() => 1);
+    await page.fill("#q", "");
+    await until(async () => (await page.$$(".item")).length === 7, "sin búsqueda");
+  })(),
+  sleep(5000).then(() => { throw new Error("la página se colgó"); }),
+]));
+
 await check("una nota: sin personas y con el cliente por añadir", async () => {
   await page.click('.item[data-id="2026-11-10_1120_Nota.md"]');
   await until(async () => (await page.$("#client-btn")) && (await text(".dhead h2")) === "Nota rápida", "detalle de la nota");

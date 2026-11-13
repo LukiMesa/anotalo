@@ -23,7 +23,11 @@ pub fn collect(log: &Path, audio: impl FnOnce() -> Audio) -> String {
     let tail = match std::fs::read(log) {
         Ok(bytes) => {
             let text = String::from_utf8_lossy(&bytes);
-            let kept: Vec<&str> = text.lines().filter(|l| !private(l)).collect();
+            let kept: Vec<String> = text
+                .lines()
+                .filter(|l| !private(l))
+                .map(redact_titles)
+                .collect();
             kept[kept.len().saturating_sub(LOG_LINES)..].join("\n")
         }
         Err(e) => format!("(no se pudo leer app.log: {e})"),
@@ -35,12 +39,37 @@ pub fn collect(log: &Path, audio: impl FnOnce() -> Audio) -> String {
     )
 }
 
-/// Una línea de app.log que no se copia: títulos de ventanas (pestañas, asuntos de correos) o lo
-/// dicho en una llamada (con el registro detallado, `[00:01:15] Ana: …`).
+/// Una línea de app.log que no se copia: títulos de ventanas (pestañas, asuntos de correos), los
+/// nombres de las voces de una llamada o lo dicho en ella (con el registro detallado,
+/// `[00:01:15] Ana: …`).
 fn private(line: &str) -> bool {
     // "2026-11-12 10:00:00,123 INFO anotalo::x: mensaje"
     let msg = line.split_once(": ").map_or(line, |(_, m)| m);
-    msg.starts_with("Ventanas de ") || msg.starts_with("Las demás ventanas de ") || spoken(msg)
+    msg.starts_with("Ventanas de ")
+        || msg.starts_with("Las demás ventanas de ")
+        || msg.starts_with("Voces de la llamada")
+        || spoken(msg)
+}
+
+/// Lo que va entre «comillas» (el título de una reunión, el nombre de un dispositivo) se tapa.
+fn redact_titles(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find('«') {
+        out.push_str(&rest[..open]);
+        match rest[open..].find('»') {
+            Some(close) => {
+                out.push_str("«…»");
+                rest = &rest[open + close + '»'.len_utf8()..];
+            }
+            None => {
+                out.push_str("«…");
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `[hh:mm:ss] ` al principio.
@@ -98,6 +127,18 @@ mod tests {
             392,
             line(0, "[00:01:15] Ana: el presupuesto es de diez mil"),
         );
+        // el título de la reunión se tapa y los nombres de las voces no salen (revisión del M3)
+        lines.insert(
+            393,
+            line(
+                0,
+                "Llamada detectada: Teams (Teams) «Reunión con Globex – despido de X»",
+            ),
+        );
+        lines.insert(
+            394,
+            line(0, "Voces de la llamada: María, Persona 1 (40 segmentos)"),
+        );
         std::fs::write(&log, lines.join("\n") + "\n").unwrap();
 
         let text = collect(&log, audio);
@@ -119,13 +160,23 @@ mod tests {
             .filter(|l| l.starts_with("2026-"))
             .collect();
         assert_eq!(tail.len(), LOG_LINES);
-        assert!(tail[0].ends_with("línea 251"), "{}", tail[0]);
+        // la línea de la llamada detectada se queda (tapada): el registro empieza una antes
+        assert!(tail[0].ends_with("línea 252"), "{}", tail[0]);
         assert!(tail[LOG_LINES - 1].ends_with("línea 400"));
         assert!(
             !text.contains("Ventanas de") && !text.contains("ventanas de"),
             "{text}"
         );
         assert!(!text.contains("presupuesto"));
+        assert!(
+            !text.contains("Globex") && !text.contains("despido"),
+            "{text}"
+        );
+        assert!(!text.contains("María"), "{text}");
+        assert!(
+            text.contains("Llamada detectada: Teams (Teams) «…»"),
+            "{text}"
+        );
     }
 
     #[test]
