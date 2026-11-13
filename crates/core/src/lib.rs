@@ -23,4 +23,5 @@ pub mod source;
 pub mod speaker;
 pub mod transcript;
 pub mod ui_api;
+pub mod updater;
 pub mod vad;
