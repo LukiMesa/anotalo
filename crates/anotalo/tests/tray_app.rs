@@ -385,10 +385,11 @@ fn tray_app_window_shows_and_lists() {
 fn test_webview_failure_keeps_tray_app() {
     let tmp = tempfile::tempdir().unwrap();
     let (mut app, out, hwnd) = launch_with(tmp.path(), &[("ANOTALO_FAKE_WEBVIEW_FAILURE", "1")]);
+    // el texto de un aviso no se puede copiar: al pulsarlo se abre la página de descarga
     wait_for("el aviso de WebView2", Duration::from_secs(20), || {
         log_has(
             tmp.path(),
-            "Aviso: No se pudo abrir la ventana — Instala WebView2: https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+            "Aviso: No se pudo abrir la ventana — Instala WebView2: https://go.microsoft.com/fwlink/p/?LinkId=2124703 (al pulsarlo abre https://go.microsoft.com/fwlink/p/?LinkId=2124703)",
         )
     });
     assert!(main_window().is_none(), "sin ventana principal");

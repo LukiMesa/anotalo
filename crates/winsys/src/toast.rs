@@ -1,11 +1,11 @@
 //! Avisos de Windows (WinRT `ToastNotificationManager`) con el AppUserModelID de Anotalo,
 //! registrado en `HKCU\Software\Classes\AppUserModelId\Anotalo` (sin acceso directo). Al hacer clic
 //! en "Transcripción guardada" se abre el archivo: activación por protocolo con `file:///…`, que no
-//! necesita un servidor COM propio (un solo exe).
+//! necesita un servidor COM propio (un solo exe). Igual con una página web (`https://…`).
 
 use std::fmt::Write;
 use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
@@ -115,11 +115,24 @@ fn file_uri(path: &Path) -> String {
     out
 }
 
-pub fn toast_xml(title: &str, body: &str, open: Option<&Path>) -> String {
-    let launch = open.map_or(String::new(), |p| {
+/// Lo que se abre al pulsar el aviso (activación por protocolo).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Click {
+    /// Un archivo, como `file:///…`.
+    File(PathBuf),
+    /// Una página web (`https://…`), tal cual.
+    Url(String),
+}
+
+pub fn toast_xml(title: &str, body: &str, click: Option<&Click>) -> String {
+    let launch = click.map_or(String::new(), |c| {
+        let uri = match c {
+            Click::File(p) => file_uri(p),
+            Click::Url(u) => u.clone(),
+        };
         format!(
             r#" activationType="protocol" launch="{}""#,
-            xml_escape(&file_uri(p))
+            xml_escape(&uri)
         )
     });
     format!(
@@ -129,11 +142,11 @@ pub fn toast_xml(title: &str, body: &str, open: Option<&Path>) -> String {
     )
 }
 
-pub fn show(aumid: &str, title: &str, body: &str, open: Option<&Path>) -> Result<(), String> {
+pub fn show(aumid: &str, title: &str, body: &str, click: Option<&Click>) -> Result<(), String> {
     // SAFETY: inicia WinRT en este hilo si aún no lo está (si ya lo está, no pasa nada).
     let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
     let doc = XmlDocument::new().map_err(|e| e.to_string())?;
-    doc.LoadXml(&HSTRING::from(toast_xml(title, body, open)))
+    doc.LoadXml(&HSTRING::from(toast_xml(title, body, click)))
         .map_err(|e| e.to_string())?;
     let toast = ToastNotification::CreateToastNotification(&doc).map_err(|e| e.to_string())?;
     ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(aumid))

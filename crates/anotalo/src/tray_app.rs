@@ -114,8 +114,8 @@ impl AppRef {
     }
 }
 
-/// Muestra un aviso: título, texto y el archivo que abre al pulsarlo.
-type ShowToast = Arc<dyn Fn(&str, &str, Option<&Path>) -> Result<(), String> + Send + Sync>;
+/// Muestra un aviso: título, texto y lo que abre al pulsarlo (un archivo o una página web).
+type ShowToast = Arc<dyn Fn(&str, &str, Option<&toast::Click>) -> Result<(), String> + Send + Sync>;
 
 /// Cuántos avisos se están mostrando aún.
 type Counter = Arc<(Mutex<usize>, Condvar)>;
@@ -165,25 +165,35 @@ impl Toasts {
             .unwrap_or_else(|e| e.into_inner());
         *n == 0
     }
-}
 
-impl Notifier for Toasts {
-    fn notify(&self, title: &str, body: &str, open: Option<&Path>) {
-        log::info!("Aviso: {title} — {body}");
-        let (t, b, o) = (
-            title.to_string(),
-            body.to_string(),
-            open.map(Path::to_path_buf),
-        );
+    /// Un aviso que abre una página web al pulsarlo (el texto de un aviso no se puede copiar).
+    fn notify_link(&self, title: &str, body: &str, url: &str) {
+        log::info!("Aviso: {title} — {body} (al pulsarlo abre {url})");
+        self.show_later(title, body, Some(toast::Click::Url(url.to_string())));
+    }
+
+    fn show_later(&self, title: &str, body: &str, click: Option<toast::Click>) {
+        let (t, b) = (title.to_string(), body.to_string());
         let (show, showing) = (self.show.clone(), Showing::new(&self.showing));
         let _ = std::thread::Builder::new()
             .name("aviso".into())
             .spawn(move || {
                 let _showing = showing;
-                if let Err(e) = show(&t, &b, o.as_deref()) {
+                if let Err(e) = show(&t, &b, click.as_ref()) {
                     log::warn!("No se pudo mostrar el aviso: {e}");
                 }
             });
+    }
+}
+
+impl Notifier for Toasts {
+    fn notify(&self, title: &str, body: &str, open: Option<&Path>) {
+        log::info!("Aviso: {title} — {body}");
+        self.show_later(
+            title,
+            body,
+            open.map(|p| toast::Click::File(p.to_path_buf())),
+        );
     }
 }
 
@@ -776,7 +786,11 @@ impl Shell {
             }
             Err(e) => {
                 log::error!("No se pudo abrir la ventana: {e}");
-                self.toasts.notify(NO_WINDOW_TITLE, &no_window_body(), None);
+                self.toasts.notify_link(
+                    NO_WINDOW_TITLE,
+                    &no_window_body(),
+                    anotalo_winsys::webview2::DOWNLOAD_URL,
+                );
             }
         }
     }
@@ -1424,6 +1438,44 @@ mod tests {
             t0.elapsed()
         );
         assert!(t.wait(Duration::ZERO), "ya no queda ninguno");
+    }
+
+    /// El aviso de WebView2 abre la página de descarga al pulsarlo (su texto no se puede copiar);
+    /// "Transcripción guardada" sigue abriendo el archivo.
+    #[test]
+    fn test_link_toast_opens_the_page() {
+        type Shown = Vec<(String, Option<toast::Click>)>;
+        let seen: Arc<Mutex<Shown>> = Arc::default();
+        let s = seen.clone();
+        let t = Toasts::with(Arc::new(move |title, _, click| {
+            s.lock().unwrap().push((title.to_string(), click.cloned()));
+            Ok(())
+        }));
+        let url = anotalo_winsys::webview2::DOWNLOAD_URL;
+        t.notify_link(NO_WINDOW_TITLE, &no_window_body(), url);
+        t.notify(
+            "Transcripción guardada",
+            "x.md",
+            Some(Path::new(r"C:\Llamadas\x.md")),
+        );
+        t.notify("Grabando", "Teams", None);
+        assert!(t.wait(Duration::from_secs(5)));
+        let mut seen = seen.lock().unwrap().clone();
+        seen.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            seen,
+            [
+                ("Grabando".to_string(), None),
+                (
+                    NO_WINDOW_TITLE.to_string(),
+                    Some(toast::Click::Url(url.into()))
+                ),
+                (
+                    "Transcripción guardada".to_string(),
+                    Some(toast::Click::File(r"C:\Llamadas\x.md".into()))
+                ),
+            ]
+        );
     }
 
     #[test]

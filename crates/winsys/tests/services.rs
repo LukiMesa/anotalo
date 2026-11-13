@@ -1,12 +1,13 @@
 //! Portapapeles, avisos de Windows e instancia única.
 //! Las ignoradas tocan el portapapeles o muestran un aviso: `-- --ignored` en este PC.
-use std::path::Path;
-
+use anotalo_winsys::toast::Click;
 use anotalo_winsys::{clipboard, instance, toast};
+use windows::Data::Xml::Dom::XmlDocument;
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegDeleteTreeW, RegGetValueW,
 };
+use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
 use windows::core::{HSTRING, PCWSTR, w};
 
 #[test]
@@ -14,7 +15,7 @@ fn test_toast_xml_escapes_and_links_the_file() {
     let xml = toast::toast_xml(
         "Error & <aviso>",
         "Revisa \"app.log\"",
-        Some(Path::new(r"C:\Llamadas\a b é.md")),
+        Some(&Click::File(r"C:\Llamadas\a b é.md".into())),
     );
     assert!(
         xml.contains("<text>Error &amp; &lt;aviso&gt;</text>"),
@@ -29,6 +30,44 @@ fn test_toast_xml_escapes_and_links_the_file() {
         xml.contains(r#"launch="file:///C:/Llamadas/a%20b%20%C3%A9.md""#),
         "{xml}"
     );
+}
+
+/// El texto de un aviso no se puede seleccionar: el enlace se abre al pulsar el aviso.
+#[test]
+fn test_toast_xml_opens_a_web_page() {
+    let url = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
+    let xml = toast::toast_xml(
+        "No se pudo abrir la ventana",
+        &format!("Instala WebView2: {url}"),
+        Some(&Click::Url(url.into())),
+    );
+    assert!(xml.contains(r#"activationType="protocol""#), "{xml}");
+    assert!(xml.contains(&format!(r#"launch="{url}""#)), "{xml}");
+    assert!(
+        xml.contains(&format!("<text>Instala WebView2: {url}</text>")),
+        "{xml}"
+    );
+    // la URL va tal cual, solo escapada para el XML
+    let xml = toast::toast_xml(
+        "Aviso",
+        "Texto",
+        Some(&Click::Url(r#"https://example.com/?a=1&b="<x>""#.into())),
+    );
+    assert!(
+        xml.contains(r#"launch="https://example.com/?a=1&amp;b=&quot;&lt;x&gt;&quot;""#),
+        "{xml}"
+    );
+    // Windows lee de vuelta la misma URL (sin mostrar nada)
+    // SAFETY: inicia WinRT en este hilo.
+    let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
+    let doc = XmlDocument::new().unwrap();
+    doc.LoadXml(&HSTRING::from(xml)).unwrap();
+    let launch = doc
+        .DocumentElement()
+        .unwrap()
+        .GetAttribute(&HSTRING::from("launch"))
+        .unwrap();
+    assert_eq!(launch.to_string(), r#"https://example.com/?a=1&b="<x>""#);
 }
 
 #[test]
@@ -144,7 +183,7 @@ fn toast_appears() {
         toast::AUMID,
         "Aviso de prueba",
         "Comprobando los avisos de Anotalo: al hacer clic se abre un archivo de prueba",
-        Some(&file),
+        Some(&Click::File(file)),
     )
     .unwrap();
 }
