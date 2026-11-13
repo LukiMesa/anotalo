@@ -15,6 +15,7 @@ mod console;
 mod diagnostics;
 mod record;
 mod setup_cmd;
+mod setup_ui;
 mod shell;
 mod tray_app;
 mod ui_bridge;
@@ -77,6 +78,8 @@ enum Command {
     ForgetVoice(String),
     /// El servidor MCP para Claude Code, por stdin/stdout.
     Mcp,
+    /// La ventana del instalador con datos de ejemplo (solo la versión de desarrollo).
+    SetupPreview(String),
 }
 
 fn parse_args(args: &[String]) -> Result<Command, String> {
@@ -110,6 +113,11 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             Ok(Command::ForgetVoice(args[2].clone()))
         }
         Some("mcp") if args.len() == 1 => Ok(Command::Mcp),
+        Some("--setup-preview")
+            if args.len() == 2 && matches!(args[1].as_str(), "install" | "uninstall") =>
+        {
+            Ok(Command::SetupPreview(args[1].clone()))
+        }
         _ => Err(USAGE.to_string()),
     }
 }
@@ -371,6 +379,14 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(Command::ForgetVoice(name)) => report(voices_cli::forget(&name)),
+        Ok(Command::SetupPreview(mode)) => {
+            if anotalo_core::paths::profile() != anotalo_core::paths::Profile::Dev {
+                eprintln!("Error: --setup-preview es solo para la versión de desarrollo");
+                return ExitCode::from(2);
+            }
+            init_log();
+            setup_cmd::preview(&mode)
+        }
         Err(usage) => {
             eprintln!("{usage}");
             ExitCode::from(2)
@@ -449,6 +465,25 @@ mod tests {
                 "\n\nDesde PowerShell, añade \"| Out-Host\" para esperar a que termine."
             )
         );
+    }
+
+    #[test]
+    fn parses_setup_preview() {
+        use super::{Command, parse_args};
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        for mode in ["install", "uninstall"] {
+            assert!(matches!(
+                parse_args(&s(&["--setup-preview", mode])),
+                Ok(Command::SetupPreview(m)) if m == mode
+            ));
+        }
+        for bad in [
+            &["--setup-preview"][..],
+            &["--setup-preview", "otra"],
+            &["--setup-preview", "install", "x"],
+        ] {
+            assert!(parse_args(&s(bad)).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

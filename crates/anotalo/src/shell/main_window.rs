@@ -44,15 +44,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GWLP_USERDATA, GetClientRect, GetSystemMetrics, GetWindowLongPtrW, GetWindowPlacement,
     GetWindowRect, HICON, HTCLIENT, IDC_ARROW, IMAGE_ICON, IsIconic, IsWindowVisible, IsZoomed,
     LR_DEFAULTSIZE, LoadCursorW, LoadImageW, MINMAXINFO, MONITORINFOF_PRIMARY, NCCALCSIZE_PARAMS,
-    RegisterClassExW, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SM_CXSMICON, SM_CYSMICON,
-    STYLESTRUCT, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SYSTEM_METRICS_INDEX,
+    RegisterClassExW, SC_MAXIMIZE, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SM_CXSMICON,
+    SM_CYSMICON, STYLESTRUCT, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SYSTEM_METRICS_INDEX,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
     WINDOWPLACEMENT, WM_CLOSE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE,
-    WM_NCDESTROY, WM_NCHITTEST, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGING, WNDCLASSEXW,
-    WS_CLIPCHILDREN, WS_OVERLAPPEDWINDOW,
+    WM_NCDESTROY, WM_NCHITTEST, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGING,
+    WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_OVERLAPPEDWINDOW,
 };
-use windows::core::{BOOL, Interface, PCWSTR, w};
+use windows::core::{BOOL, HSTRING, Interface, PCWSTR, w};
 use wry::dpi::{PhysicalPosition, PhysicalSize};
 use wry::http::{Response, StatusCode, Uri, header};
 use wry::raw_window_handle::{
@@ -72,8 +72,8 @@ pub const DEFAULT_SIZE: (i32, i32) = (1120, 720);
 pub const MIN_SIZE: (i32, i32) = (940, 600);
 /// Fondo de la ventana y de la página mientras carga: #10141F.
 const BACKGROUND: (u8, u8, u8) = (0x10, 0x14, 0x1F);
-/// La página, servida desde el exe.
-pub const START_URL: &str = "anotalo://localhost/index.html";
+/// La página de la app, servida desde el exe (la del instalador es `setup.html`).
+const START_PAGE: &str = "index.html";
 const PROTOCOL: &str = "anotalo";
 /// Cómo la ve WebView2: wry convierte `anotalo://localhost/` en `https://anotalo.localhost/`, un
 /// origen seguro (portapapeles) que nunca sale a internet (`.localhost` no se resuelve fuera del
@@ -226,13 +226,55 @@ pub fn work_areas() -> Vec<RECT> {
 /// con el tamaño por defecto (a la escala del sistema).
 pub fn initial_rect(saved: Option<RECT>) -> RECT {
     let areas = work_areas();
-    let dpi = {
-        let _dpi = PerMonitorDpi::enter();
-        // SAFETY: sin punteros.
-        unsafe { GetDpiForSystem() }
-    };
-    let size = |(w, h): (i32, i32)| (scaled(w, dpi), scaled(h, dpi));
+    let size = |(w, h): (i32, i32)| (scaled(w, system_dpi()), scaled(h, system_dpi()));
     frame::restore_rect(saved, &areas, size(DEFAULT_SIZE), size(MIN_SIZE))
+}
+
+/// Una ventana de `size` (píxeles a 96 ppp, a la escala del sistema), centrada en el monitor
+/// principal.
+pub fn centered_rect(size: (i32, i32)) -> RECT {
+    let dpi = system_dpi();
+    let size = (scaled(size.0, dpi), scaled(size.1, dpi));
+    frame::restore_rect(None, &work_areas(), size, size)
+}
+
+fn system_dpi() -> u32 {
+    let _dpi = PerMonitorDpi::enter();
+    // SAFETY: sin punteros.
+    unsafe { GetDpiForSystem() }
+}
+
+/// Tamaños mínimo y máximo al arrastrar: el mínimo de la principal, o el fijo (mínimo = máximo)
+/// de una ventana que no cambia de tamaño. `fixed` en píxeles a 96 ppp.
+fn track_sizes(fixed: Option<(i32, i32)>, dpi: u32) -> (POINT, Option<POINT>) {
+    let point = |(w, h): (i32, i32)| POINT {
+        x: scaled(w, dpi),
+        y: scaled(h, dpi),
+    };
+    match fixed {
+        Some(size) => (point(size), Some(point(size))),
+        None => (point(MIN_SIZE), None),
+    }
+}
+
+/// La URL de un archivo de la página (`index.html`, `setup.html`), como la ve WebView2.
+fn page_url(page: &str) -> String {
+    format!("{PAGE_ORIGIN}{page}")
+}
+
+/// Qué ventana: la principal (`MainWindow::create`) o la del instalador.
+pub struct Spec {
+    /// El archivo de `web/` que abre.
+    pub page: &'static str,
+    /// El título (barra de tareas, Alt+Tab).
+    pub title: &'static str,
+    /// Los datos de WebView2.
+    pub data_dir: PathBuf,
+    /// Tamaño fijo, en píxeles a 96 ppp: sin redimensionar ni maximizar. None: la principal.
+    pub fixed: Option<(i32, i32)>,
+    pub start_hidden: bool,
+    /// Dónde, en píxeles físicos.
+    pub rect: RECT,
 }
 
 /// Lo que cambia en la ventana y le interesa a la app.
@@ -254,6 +296,8 @@ struct Shared {
     webview: RefCell<Option<WebView>>,
     listener: RefCell<Option<Listener>>,
     maximized: Cell<bool>,
+    /// Tamaño fijo (la ventana del instalador), en píxeles a 96 ppp.
+    fixed: Option<(i32, i32)>,
 }
 
 impl Shared {
@@ -281,6 +325,29 @@ impl MainWindow {
         start_hidden: bool,
         rect: RECT,
     ) -> Result<MainWindow, String> {
+        MainWindow::create_with(
+            on_ipc,
+            Spec {
+                page: START_PAGE,
+                title: "Anotalo",
+                data_dir: webview_data_dir(),
+                fixed: None,
+                start_hidden,
+                rect,
+            },
+        )
+    }
+
+    /// Como `create`, con otra página, título, datos o un tamaño fijo (el instalador).
+    pub fn create_with(on_ipc: Box<dyn Fn(String)>, spec: Spec) -> Result<MainWindow, String> {
+        let Spec {
+            page,
+            title,
+            data_dir,
+            fixed,
+            start_hidden,
+            rect,
+        } = spec;
         let runtime = webview2_loader::find_runtime()?;
         log::info!(
             "WebView2 {} ({})",
@@ -293,13 +360,14 @@ impl MainWindow {
             return Err("La ventana necesita COM de un solo hilo (STA) en su hilo".into());
         }
         let _dpi = PerMonitorDpi::enter();
-        let hwnd = create_hwnd(rect)?;
+        let hwnd = create_hwnd(rect, title)?;
         let window = MainWindow {
             hwnd,
             shared: Box::new(Shared {
                 webview: RefCell::new(None),
                 listener: RefCell::new(None),
                 maximized: Cell::new(false),
+                fixed,
             }),
         };
         // SAFETY: `shared` vive en el montón hasta Drop, que antes la quita de la ventana.
@@ -315,12 +383,25 @@ impl MainWindow {
                 0,
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
+            // al crearla aún no se sabía que era de tamaño fijo (Windows le aplicó el mínimo de la
+            // principal): se le da el suyo
+            if fixed.is_some() {
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
         }
         apply_chrome(hwnd);
-        let webview = build_webview(hwnd, on_ipc)?; // si falla, Drop destruye la ventana
+        let webview = build_webview(hwnd, on_ipc, data_dir)?; // si falla, Drop destruye la ventana
         enable_drag_regions(&webview);
         webview
-            .load_url(&START_URL.replacen("anotalo://", "https://anotalo.", 1))
+            .load_url(&page_url(page))
             .map_err(|e| format!("No se pudo abrir la página: {e}"))?;
         *window.shared.webview.borrow_mut() = Some(webview);
         fit_webview(hwnd);
@@ -454,7 +535,7 @@ impl Drop for MainWindow {
     }
 }
 
-fn create_hwnd(rect: RECT) -> Result<HWND, String> {
+fn create_hwnd(rect: RECT, title: &str) -> Result<HWND, String> {
     // SAFETY: clase y ventana de este proceso; `wndproc` vive lo que el proceso.
     unsafe {
         let instance = GetModuleHandleW(None).map_err(|e| e.to_string())?;
@@ -500,7 +581,7 @@ fn create_hwnd(rect: RECT) -> Result<HWND, String> {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             CLASS,
-            w!("Anotalo"),
+            &HSTRING::from(title),
             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             rect.left,
             rect.top,
@@ -566,8 +647,12 @@ fn webview_data_dir() -> PathBuf {
     }
 }
 
-fn build_webview(hwnd: HWND, on_ipc: Box<dyn Fn(String)>) -> Result<WebView, String> {
-    let mut context = WebContext::new(Some(webview_data_dir()));
+fn build_webview(
+    hwnd: HWND,
+    on_ipc: Box<dyn Fn(String)>,
+    data_dir: PathBuf,
+) -> Result<WebView, String> {
+    let mut context = WebContext::new(Some(data_dir));
     let (r, g, b) = BACKGROUND;
     WebViewBuilder::new_with_web_context(&mut context)
         .with_background_color((r, g, b, 255))
@@ -618,6 +703,11 @@ fn shared<'a>(hwnd: HWND) -> Option<&'a Shared> {
     unsafe { (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Shared).as_ref() }
 }
 
+/// El tamaño fijo de la ventana, si lo tiene.
+fn fixed_size(hwnd: HWND) -> Option<(i32, i32)> {
+    shared(hwnd).and_then(|s| s.fixed)
+}
+
 fn with_webview(hwnd: HWND, f: impl FnOnce(&WebView)) {
     if let Some(s) = shared(hwnd)
         && let Ok(webview) = s.webview.try_borrow()
@@ -636,7 +726,8 @@ fn fit_webview(hwnd: HWND) {
     }
     // SAFETY: sin punteros.
     let maximized = unsafe { IsZoomed(hwnd) }.as_bool();
-    let border = if maximized {
+    // maximizada o de tamaño fijo no hay borde para redimensionar
+    let border = if maximized || fixed_size(hwnd).is_some() {
         0
     } else {
         scaled(RESIZE_BORDER, dpi_of(hwnd))
@@ -687,6 +778,12 @@ unsafe fn handle(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT
             }
             Some(LRESULT(0)) // sin marco: toda la ventana es contenido
         }
+        // tamaño fijo: sin bordes para redimensionar
+        WM_NCHITTEST if fixed_size(hwnd).is_some() => None,
+        // tamaño fijo: ni el botón, ni el doble clic en la barra, ni Win+↑ la maximizan
+        WM_SYSCOMMAND if fixed_size(hwnd).is_some() && (wp.0 & 0xFFF0) as u32 == SC_MAXIMIZE => {
+            Some(LRESULT(0))
+        }
         WM_NCHITTEST => {
             let mut wr = RECT::default();
             // SAFETY: ventana de este hilo.
@@ -712,11 +809,12 @@ unsafe fn handle(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT
         WM_GETMINMAXINFO => {
             // SAFETY: lParam es un MINMAXINFO.
             let info = unsafe { &mut *(lp.0 as *mut MINMAXINFO) };
-            let dpi = dpi_of(hwnd);
-            info.ptMinTrackSize = POINT {
-                x: scaled(MIN_SIZE.0, dpi),
-                y: scaled(MIN_SIZE.1, dpi),
-            };
+            let (min, max) = track_sizes(fixed_size(hwnd), dpi_of(hwnd));
+            info.ptMinTrackSize = min;
+            if let Some(max) = max {
+                info.ptMaxTrackSize = max;
+                info.ptMaxSize = max;
+            }
             Some(LRESULT(0))
         }
         WM_SIZE => {
@@ -804,6 +902,23 @@ mod tests {
     };
 
     #[test]
+    fn test_fixed_windows_cannot_change_size() {
+        // la principal: solo un mínimo
+        let (min, max) = track_sizes(None, 96);
+        assert_eq!((min.x, min.y, max), (940, 600, None));
+        // la del instalador: mínimo = máximo, a la escala del monitor
+        let (min, max) = track_sizes(Some((460, 440)), 144);
+        assert_eq!((min.x, min.y), (690, 660));
+        assert_eq!(max.map(|p| (p.x, p.y)), Some((690, 660)));
+        assert!(serve("anotalo://localhost/setup.html").status() == 200);
+        assert_eq!(
+            page_url("setup.html"),
+            "https://anotalo.localhost/setup.html"
+        );
+        assert_eq!(page_url(START_PAGE), "https://anotalo.localhost/index.html");
+    }
+
+    #[test]
     fn test_page_assets_served_with_content_type() {
         let (ty, page) = asset("/index.html").expect("index.html");
         assert_eq!(ty, "text/html; charset=utf-8");
@@ -830,7 +945,7 @@ mod tests {
         assert_eq!(decode_path("/a%C3%B1o.css"), "/año.css");
         assert_eq!(decode_path("/mal%2"), "/mal%2");
 
-        let ok = serve(START_URL);
+        let ok = serve("anotalo://localhost/index.html");
         assert_eq!(ok.status(), 200);
         assert_eq!(ok.headers()["content-type"], "text/html; charset=utf-8");
         assert_eq!(ok.headers()["cache-control"], "no-store");

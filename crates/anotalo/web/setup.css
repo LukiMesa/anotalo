@@ -1,0 +1,57 @@
+/* El instalador y el desinstalador: 460×440, los colores y las fuentes de la app (tokens.css). */
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--surface); color: var(--ink); font-family: var(--font-sans); font-size: 14px; -webkit-font-smoothing: antialiased; user-select: none; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* barra superior: se arrastra la ventana desde aquí */
+.bar { app-region: drag; height: 36px; display: flex; align-items: center; justify-content: space-between; background: var(--surface-sunken); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 8px; padding: 0 14px; font-family: var(--font-display); font-weight: 600; font-size: 12.5px; letter-spacing: -0.01em; }
+.brand img { border-radius: 5px; }
+.wordmark .acc { color: var(--orbita); }
+.close { app-region: no-drag; width: 44px; height: 100%; border: 0; background: none; color: var(--ink-muted); display: grid; place-items: center; transition: background var(--duration-fast), color var(--duration-fast); }
+.close svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; }
+.close:hover { background: #C42B1C; color: #fff; }
+.close:focus-visible { outline-offset: -2px; }
+.close[disabled] { opacity: .35; cursor: default; background: none; color: var(--ink-muted); }
+
+/* contenido */
+.pane { height: calc(100vh - 36px); display: flex; flex-direction: column; padding: 22px 32px 22px; animation: rise-in var(--duration-view) var(--ease-out); }
+@keyframes rise-in { from { opacity: 0; transform: translateY(var(--rise)); } }
+.hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; }
+.logo { border-radius: 12px; box-shadow: var(--shadow-raised); margin-bottom: 4px; }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: 21px; letter-spacing: -0.01em; margin: 0; }
+.sub { margin: 0; color: var(--ink-muted); font-size: 13.5px; line-height: 1.45; overflow-wrap: anywhere; }
+
+.opts { margin-top: 18px; display: grid; gap: 4px; }
+.opt { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 12px; border-radius: var(--radius-md); cursor: pointer; transition: background var(--duration-fast); }
+.opt:hover { background: var(--surface-raised); }
+.opt input { width: 16px; height: 16px; margin: 0; accent-color: var(--orbita); cursor: pointer; flex: none; }
+.opt input:disabled, .opt input:disabled + span { cursor: default; opacity: .55; }
+
+.notes { margin-top: 12px; display: grid; gap: 6px; }
+.note { margin: 0; padding: 9px 12px; border-radius: var(--radius-md); background: var(--orbita-soft); color: var(--ink); font-size: 12.5px; line-height: 1.45; }
+
+.foot { margin-top: auto; display: grid; gap: 10px; }
+.buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.btn { height: 36px; display: inline-flex; align-items: center; padding: 0 18px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--surface-raised); font-size: 13px; font-weight: 600; white-space: nowrap; transition: background var(--duration-fast), border-color var(--duration-fast), transform var(--duration-fast), filter var(--duration-fast); }
+.btn:hover { border-color: var(--line-strong); }
+.btn:active { transform: scale(.97); }
+.btn.primary { background: var(--orbita); color: var(--on-orbita); border-color: transparent; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn[disabled] { opacity: .45; cursor: default; transform: none; filter: none; }
+
+.progress { display: grid; gap: 7px; font-size: 12.5px; color: var(--ink-muted); }
+.track { height: 6px; border-radius: var(--radius-pill); background: var(--surface-sunken); border: 1px solid var(--line); overflow: hidden; }
+.fill { height: 100%; width: 0; border-radius: inherit; background: var(--orbita); transition: width var(--duration-base) var(--ease-out); }
+.fill.indeterminate { width: 35%; animation: slide 1.2s var(--ease-out) infinite; }
+@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+.err { margin: 0; color: var(--error); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; user-select: text; }
+.done { margin: 0; color: var(--exito); font-size: 13.5px; font-weight: 600; text-align: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pane, .fill.indeterminate { animation: none; }
+  .fill, .btn, .opt, .close { transition: none; }
+}

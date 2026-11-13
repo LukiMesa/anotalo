@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anotalo</title>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="setup.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><img src="icono.svg" alt="" width="20" height="20"><span class="wordmark" aria-label="Anotalo"><span class="acc">Anota</span>lo</span></div>
+  <button class="close" id="close" aria-label="Cerrar" title="Cerrar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
+</header>
+
+<main class="pane" id="install" hidden>
+  <div class="hero">
+    <img class="logo" src="icono.svg" alt="" width="48" height="48">
+    <h1 id="i-title">Anotalo</h1>
+    <p class="sub">Transcribe tus llamadas en tu PC. Nada sale de él.</p>
+  </div>
+  <div class="opts">
+    <label class="opt"><input type="checkbox" id="opt-autostart"><span>Iniciar con Windows</span></label>
+    <label class="opt"><input type="checkbox" id="opt-desktop"><span>Acceso directo en el escritorio</span></label>
+  </div>
+  <div class="notes">
+    <p class="note" id="note-transcriptor" hidden>Sustituye a Transcriptor. Tus grabaciones y ajustes se conservan.</p>
+    <p class="note" id="note-running" hidden>Anotalo se cerrará para actualizarse; si está grabando, la grabación se guarda antes.</p>
+  </div>
+  <div class="foot">
+    <div class="progress" id="i-progress" hidden><div class="track"><div class="fill" id="i-fill"></div></div><span id="i-progress-text">Instalando…</span></div>
+    <p class="err" id="i-error" role="alert" hidden></p>
+    <div class="buttons"><button class="btn primary" id="i-go">Instalar</button></div>
+  </div>
+</main>
+
+<main class="pane" id="uninstall" hidden>
+  <div class="hero">
+    <img class="logo" src="icono.svg" alt="" width="48" height="48">
+    <h1>Desinstalar Anotalo</h1>
+    <p class="sub" id="u-text"></p>
+  </div>
+  <div class="opts" id="u-opts">
+    <label class="opt"><input type="checkbox" id="opt-purge"><span>Borrar también los ajustes y los modelos descargados</span></label>
+  </div>
+  <div class="foot">
+    <div class="progress" id="u-progress" hidden><div class="track"><div class="fill indeterminate"></div></div><span>Desinstalando…</span></div>
+    <p class="err" id="u-error" role="alert" hidden></p>
+    <p class="done" id="u-done" role="status" hidden>Anotalo se ha desinstalado.</p>
+    <div class="buttons">
+      <button class="btn" id="u-cancel">Cancelar</button>
+      <button class="btn primary" id="u-go">Desinstalar</button>
+      <button class="btn primary" id="u-close" hidden>Cerrar</button>
+    </div>
+  </div>
+</main>
+
+<script src="bridge.js"></script>
+<script src="setup.js"></script>
+</body>
+</html>

@@ -1,21 +1,29 @@
 //! El exe como instalador y desinstalador (spec §5.8; `anotalo_setup::cmdline` decide cuándo).
 //!
 //! Siempre sobre la instalación del usuario (`Layout::current`), se lance desde donde se lance.
-//! Registra en `%APPDATA%\Anotalo\setup.log`. En silencio no pregunta nada; si no, hasta que haya
-//! ventana de instalación (M4 Task 14), usa cuadros de mensaje.
+//! Registra en `%APPDATA%\Anotalo\setup.log`. En silencio no pregunta nada; si no, abre su
+//! ventana (`setup_ui`), o cuadros de mensaje sin WebView2.
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use anotalo_core::applog;
 use anotalo_core::config::read_output_dir;
 use anotalo_core::paths::Profile;
 use anotalo_setup::cmdline::SetupMode;
-use anotalo_setup::install::{Payload, inspect, install};
+use anotalo_setup::install::{Found, Options, Payload, inspect, install};
 use anotalo_setup::layout::Layout;
+use anotalo_setup::legacy::InnoInstall;
 use anotalo_setup::system::RealSystem;
 use anotalo_setup::uninstall::{schedule_self_delete, uninstall};
 use anotalo_winsys::{dialog, instance, webview2, webview2_loader};
+
+use crate::setup_ui::{self, Outcome, Runner};
+
+/// Los títulos de la ventana (barra de tareas, Alt+Tab).
+const INSTALL_TITLE: &str = "Instalar Anotalo";
+const UNINSTALL_TITLE: &str = "Desinstalar Anotalo";
 
 /// La `vcomp140.dll` de Microsoft (firmada por Microsoft), que el instalador pone junto al exe.
 pub static VCOMP140: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/vcomp140.dll"));
@@ -121,6 +129,13 @@ fn run_install(l: &Layout, exe: &Path, silent: bool) -> ExitCode {
         found.legacy_running,
         found.defaults
     );
+    if !silent && webview2_loader::find_runtime().is_ok() {
+        match install_window(l, exe, &found) {
+            Ok(Some(Err(_))) => return ExitCode::from(1),
+            Ok(_) => return ExitCode::SUCCESS,
+            Err(e) => log::warn!("Sin ventana de instalación ({e}): sigo con cuadros de mensaje"),
+        }
+    }
     if !silent {
         // el mismo criterio que la ventana de la app: si su cargador no encuentra el runtime
         if let Err(e) = webview2_loader::find_runtime() {
@@ -160,8 +175,83 @@ fn run_install(l: &Layout, exe: &Path, silent: bool) -> ExitCode {
     }
 }
 
+/// La ventana del instalador. Err si no se pudo abrir.
+fn install_window(l: &Layout, exe: &Path, found: &Found) -> Result<Outcome, String> {
+    let recordings = read_output_dir(&l.data_dir().join("config.json"), Profile::Installed);
+    let info = setup_ui::info("install", found, VERSION, &recordings);
+    let (l, exe, defaults) = (l.clone(), exe.to_path_buf(), found.defaults);
+    let runner: Runner = Box::new(move |opts, step| {
+        let options = Options {
+            autostart: opts["autostart"].as_bool().unwrap_or(defaults.autostart),
+            desktop: opts["desktop"].as_bool().unwrap_or(defaults.desktop),
+        };
+        let payload = Payload {
+            exe: &exe,
+            vcomp: VCOMP140,
+            version: VERSION,
+        };
+        // no en silencio: al terminar, la app se abre con su ventana
+        install(&l, &payload, options, false, &RealSystem::new(), &mut |s| {
+            log::info!("Paso: {s:?}");
+            step(setup_ui::step_name(s));
+        })
+        .map(|()| None)
+    });
+    setup_ui::run_window(INSTALL_TITLE, info, runner, true)
+}
+
+/// La ventana del desinstalador. Err si no se pudo abrir.
+fn uninstall_window(l: &Layout, exe: &Path, recordings: &Path) -> Result<Outcome, String> {
+    let found = Found {
+        anotalo: None,
+        inno: None,
+        app_running: false,
+        legacy_running: false,
+        defaults: Options {
+            autostart: false,
+            desktop: false,
+        },
+    };
+    let info = setup_ui::info("uninstall", &found, VERSION, recordings);
+    let (l, exe) = (l.clone(), exe.to_path_buf());
+    let runner: Runner = Box::new(move |opts, step| {
+        step("removing");
+        let purge = opts["purge"].as_bool().unwrap_or(false);
+        let removal = uninstall(&l, purge, &RealSystem::new(), &exe);
+        for p in &removal.problems {
+            log::warn!("Al desinstalar: {p}");
+        }
+        Ok(removal.deferred)
+    });
+    setup_ui::run_window(UNINSTALL_TITLE, info, runner, false)
+}
+
+/// Borra este exe al salir, si el desinstalador lo dejó para el final.
+fn delete_on_exit(deferred: Option<&Path>) {
+    if let Some(own) = deferred {
+        let dir = own.parent().map(Path::to_path_buf).unwrap_or_default();
+        if let Err(e) = schedule_self_delete(own, &dir) {
+            log::error!("{e}");
+        }
+    }
+}
+
 fn run_uninstall(l: &Layout, exe: &Path, silent: bool) -> ExitCode {
     let recordings = read_output_dir(&l.data_dir().join("config.json"), Profile::Installed);
+    if !silent && webview2_loader::find_runtime().is_ok() {
+        match uninstall_window(l, exe, &recordings) {
+            Ok(outcome) => {
+                // lo último antes de salir, con la ventana ya cerrada
+                if let Some(Ok(deferred)) = &outcome {
+                    delete_on_exit(deferred.as_deref());
+                }
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                log::warn!("Sin ventana de desinstalación ({e}): sigo con cuadros de mensaje")
+            }
+        }
+    }
     if !silent && !dialog::ask(&ask_uninstall_text(&recordings)) {
         log::info!("Desinstalación cancelada");
         return ExitCode::SUCCESS;
@@ -174,13 +264,58 @@ fn run_uninstall(l: &Layout, exe: &Path, silent: bool) -> ExitCode {
         dialog::tell(&uninstalled_text(&recordings));
     }
     // lo último antes de salir: el cmd espera ~2 s y luego borra este exe y su carpeta
-    if let Some(own) = &removal.deferred {
-        let dir = own.parent().map(Path::to_path_buf).unwrap_or_default();
-        if let Err(e) = schedule_self_delete(own, &dir) {
-            log::error!("{e}");
+    delete_on_exit(removal.deferred.as_deref());
+    ExitCode::SUCCESS
+}
+
+/// `anotalo --setup-preview install|uninstall` (solo la versión de desarrollo): la ventana del
+/// instalador con datos de ejemplo y pasos simulados (400 ms cada uno), para ver cómo queda. No
+/// instala ni toca nada; con `ANOTALO_PREVIEW_FAIL=1`, la instalación falla.
+pub fn preview(mode: &str) -> ExitCode {
+    let found = Found {
+        anotalo: std::env::var("ANOTALO_PREVIEW_INSTALLED").ok(),
+        inno: Some(InnoInstall {
+            dir: std::env::temp_dir().join("Transcriptor"),
+        }),
+        app_running: true,
+        legacy_running: false,
+        defaults: Options {
+            autostart: true,
+            desktop: false,
+        },
+    };
+    let recordings = anotalo_core::paths::default_output_dir(Profile::Installed);
+    let info = setup_ui::info(mode, &found, VERSION, &recordings);
+    let uninstalling = mode == "uninstall";
+    let fail = std::env::var("ANOTALO_PREVIEW_FAIL").is_ok_and(|v| v == "1");
+    let runner: Runner = Box::new(move |opts, step| {
+        log::info!("Vista previa: {opts}");
+        let steps: &[&'static str] = if uninstalling {
+            &["removing", "removing", "removing"]
+        } else {
+            &["closing", "copying", "shortcuts", "removing", "launching"]
+        };
+        for (i, s) in steps.iter().enumerate() {
+            step(s);
+            std::thread::sleep(Duration::from_millis(400));
+            if fail && i == 1 {
+                return Err("no queda espacio en el disco (simulado)".into());
+            }
+        }
+        Ok(None)
+    });
+    let title = if uninstalling {
+        UNINSTALL_TITLE
+    } else {
+        INSTALL_TITLE
+    };
+    match setup_ui::run_window(title, info, runner, !uninstalling) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            ExitCode::from(1)
         }
     }
-    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
