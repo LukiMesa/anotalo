@@ -41,8 +41,9 @@ pub trait ModelGate: Send + Sync {
 pub type Progress = Arc<dyn Fn(f32) + Send + Sync>;
 
 pub struct ModelConfig {
-    /// La fábrica del motor; recibe a quién avisar del progreso de la descarga.
-    pub factory: Box<dyn Fn(Progress) -> AsrFactory + Send + Sync>,
+    /// La fábrica del motor: `Some(modelo)` en vez del del ajuste (la medición de la GPU integrada
+    /// usa `IGPU_TIMING_MODEL`), y a quién avisar del progreso de la descarga.
+    pub factory: Box<dyn Fn(Option<&'static str>, Progress) -> AsrFactory + Send + Sync>,
     /// Dónde cargar, según los ajustes de ahora.
     pub placement: Box<dyn Fn() -> Placement + Send + Sync>,
     /// Segundos sin grabar tras los que se libera (0 = nunca).
@@ -67,6 +68,10 @@ pub struct ModelManager {
     on_change: Box<dyn Fn(ModelStatus) + Send + Sync>,
     inner: Mutex<Inner>,
 }
+
+/// El modelo con el que se mide la GPU integrada contra el procesador (spec §5.2), sea cual sea el
+/// elegido: el resultado se guarda una vez y vale para cualquiera.
+pub const IGPU_TIMING_MODEL: &str = "small";
 
 const GPU_FALLBACK: (&str, &str) = (
     "No se pudo preparar la GPU",
@@ -139,7 +144,7 @@ impl ModelManager {
 
     fn prepare_now(&self) {
         if let Some((device, name)) = (self.cfg.igpu_check)() {
-            let factory = (self.cfg.factory)(self.progress());
+            let factory = (self.cfg.factory)(Some(IGPU_TIMING_MODEL), self.progress());
             let clip = jfk_10s();
             let t0 = Instant::now();
             let clock = move || t0.elapsed().as_secs_f64();
@@ -155,7 +160,7 @@ impl ModelManager {
             (self.cfg.save_igpu)(faster, name);
         }
         let placement = (self.cfg.placement)();
-        let factory = (self.cfg.factory)(self.progress());
+        let factory = (self.cfg.factory)(None, self.progress());
         let (tx, rx) = mpsc::channel();
         let t = Transcriber::spawn(
             placement,
@@ -256,7 +261,7 @@ impl ModelManager {
         let me = self.me.clone();
         Transcriber::spawn(
             (self.cfg.placement)(),
-            (self.cfg.factory)(self.progress()),
+            (self.cfg.factory)(None, self.progress()),
             self.gpu_fallback(),
             Box::new(move |r| {
                 if let (Err(e), Some(m)) = (r, me.upgrade()) {
@@ -272,6 +277,13 @@ impl ModelManager {
         self.lock().status = ModelStatus::Failed(e.clone());
         self.notifier.notify(LOAD_FAILED.0, LOAD_FAILED.1, None);
         self.changed(ModelStatus::Failed(e));
+    }
+
+    /// Cambia en vivo cuánto tiempo sin grabar libera el modelo (cero: nunca).
+    pub fn set_release_after(&self, after: Duration) {
+        self.cfg
+            .release_after
+            .store(after.as_secs(), Ordering::SeqCst);
     }
 
     /// Terminó una grabación.

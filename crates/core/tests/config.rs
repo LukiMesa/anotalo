@@ -424,3 +424,33 @@ fn test_install_dir_and_quit_event() {
         ("AnotaloQuit", "AnotaloDevQuit")
     );
 }
+
+/// Dos guardados a la vez (la medición de la GPU integrada y el menú de la bandeja) comparten
+/// `config.json.tmp`: van uno tras otro, ninguno falla y el archivo queda entero.
+#[test]
+fn test_concurrent_saves_do_not_collide() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("config.json");
+    let errors: Vec<String> = std::thread::scope(|scope| {
+        let saves: Vec<_> = (0..8u32)
+            .map(|i| {
+                let p = &p;
+                scope.spawn(move || {
+                    let s = Settings {
+                        silence_ms: 100 + i,
+                        ..defaults()
+                    };
+                    (0..40)
+                        .filter_map(|_| save_settings(&s, p).err().map(|e| e.to_string()))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        saves.into_iter().flat_map(|t| t.join().unwrap()).collect()
+    });
+    assert!(errors.is_empty(), "{errors:?}");
+    let (s, problem) = load_settings_checked(&p, Profile::Dev);
+    assert_eq!(problem, None);
+    assert!((100..108).contains(&s.silence_ms), "{}", s.silence_ms);
+    assert!(!d.path().join("config.json.tmp").exists());
+}

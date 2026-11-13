@@ -41,6 +41,8 @@ struct Rig {
     loads: Arc<AtomicUsize>,
     statuses: Arc<Mutex<Vec<ModelStatus>>>,
     saved_igpu: Arc<Mutex<Vec<(bool, String)>>>,
+    /// El modelo pedido a la fábrica cada vez (None = el del ajuste).
+    picks: Arc<Mutex<Vec<Option<&'static str>>>>,
 }
 
 /// `load`: lo que tarda cada carga; `fail`: la carga falla; `release_s`: segundos de inactividad.
@@ -49,9 +51,16 @@ fn rig(load: Duration, fail: bool, release_s: u64, igpu: Option<(i32, String)>) 
     let loads = Arc::new(AtomicUsize::new(0));
     let statuses = Arc::new(Mutex::new(Vec::new()));
     let saved_igpu = Arc::new(Mutex::new(Vec::new()));
-    let (l, st, sv) = (loads.clone(), statuses.clone(), saved_igpu.clone());
+    let picks = Arc::new(Mutex::new(Vec::new()));
+    let (l, st, sv, pk) = (
+        loads.clone(),
+        statuses.clone(),
+        saved_igpu.clone(),
+        picks.clone(),
+    );
     let cfg = ModelConfig {
-        factory: Box::new(move |progress| {
+        factory: Box::new(move |pick, progress| {
+            pk.lock().unwrap().push(pick);
             let l = l.clone();
             Box::new(move |p: Placement| -> Result<Box<dyn Asr>, String> {
                 progress(0.5);
@@ -85,6 +94,7 @@ fn rig(load: Duration, fail: bool, release_s: u64, igpu: Option<(i32, String)>) 
         loads,
         statuses,
         saved_igpu,
+        picks,
     }
 }
 
@@ -164,11 +174,10 @@ fn test_acquire_after_release_starts_without_waiting() {
     );
     assert_eq!(r.model.status(), ModelStatus::Ready);
     assert!(t.wait_idle(Duration::from_secs(5)));
-    // la recarga va en segundo plano: se espera a que ocurra (sin un plazo fijo que falle con la
-    // máquina ocupada)
-    let end = Instant::now() + Duration::from_secs(5);
-    while r.loads.load(Ordering::SeqCst) < 2 && Instant::now() < end {
-        std::thread::sleep(Duration::from_millis(20));
+    // la recarga termina en segundo plano: 300 ms, o algo más si el equipo va cargado
+    let t1 = Instant::now();
+    while r.loads.load(Ordering::SeqCst) < 2 && t1.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(r.loads.load(Ordering::SeqCst), 2);
 }
@@ -234,6 +243,35 @@ fn test_prepare_times_the_igpu_once_and_saves_it() {
         *r.saved_igpu.lock().unwrap(),
         vec![(true, "Intel UHD 630".to_string())]
     );
+}
+
+/// La medición de la GPU integrada usa siempre `small` (spec §5.2), sea cual sea el modelo
+/// elegido; la carga de después, el del ajuste.
+#[test]
+fn test_igpu_timing_uses_the_small_model() {
+    let r = rig(
+        Duration::ZERO,
+        false,
+        600,
+        Some((0, "Intel UHD 630".into())),
+    );
+    r.model.prepare();
+    wait_for(&r.model, |s| matches!(s, ModelStatus::Ready));
+    assert_eq!(*r.picks.lock().unwrap(), vec![Some("small"), None]);
+}
+
+/// "Liberar el modelo tras…" cambia en vivo (la ventana de ajustes no reinicia nada).
+#[test]
+fn test_release_after_changes_live() {
+    let r = rig(Duration::ZERO, false, 600, None);
+    r.model.prepare();
+    wait_for(&r.model, |s| matches!(s, ModelStatus::Ready));
+    let later = Instant::now() + Duration::from_secs(120);
+    r.model.tick(later);
+    assert_eq!(r.model.status(), ModelStatus::Ready, "aún no van 10 min");
+    r.model.set_release_after(Duration::from_secs(60));
+    r.model.tick(later);
+    assert_eq!(r.model.status(), ModelStatus::Released);
 }
 
 fn dev(name: &str, kind: DeviceKind) -> Device {

@@ -13,6 +13,9 @@ use crate::filter::is_hallucination;
 use crate::models::{Fetch, Placement, cpu_threads, ensure_model, model_for};
 use crate::segmenter::Segment;
 
+/// Cada cuánto `wait_idle_until` vuelve a mirar su plazo.
+const RECHECK: Duration = Duration::from_millis(100);
+
 /// Un motor de transcripción cargado (whisper.cpp, o uno falso en los tests).
 pub trait Asr: Send {
     fn transcribe(&mut self, pcm: &[f32]) -> Result<Vec<Text>, String>;
@@ -196,10 +199,17 @@ impl Transcriber {
     /// Espera a que todo lo enviado se haya transcrito. `false` si vence el plazo.
     pub fn wait_idle(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
+        self.wait_idle_until(&|| deadline)
+    }
+
+    /// Como `wait_idle`, con un plazo que puede acortarse mientras se espera (se vuelve a mirar
+    /// cada `RECHECK`).
+    pub fn wait_idle_until(&self, deadline: &dyn Fn() -> Instant) -> bool {
         let mut q = self.shared.queue.lock().unwrap();
         while !q.jobs.is_empty() || q.busy {
             let now = Instant::now();
-            if now >= deadline {
+            let end = deadline();
+            if now >= end {
                 log::warn!(
                     "Quedan {} frases sin transcribir",
                     q.jobs.len() + usize::from(q.busy)
@@ -209,7 +219,7 @@ impl Transcriber {
             q = self
                 .shared
                 .changed
-                .wait_timeout(q, deadline - now)
+                .wait_timeout(q, (end - now).min(RECHECK))
                 .unwrap()
                 .0;
         }

@@ -14,6 +14,7 @@ use anotalo_core::detector::{Detected, DetectorControl, OnDetected};
 use anotalo_core::model::ModelGate;
 use anotalo_core::notify::Notifier;
 use anotalo_core::paths::Profile;
+use anotalo_core::session::Hurry;
 use anotalo_core::source::OthersSpec;
 
 #[derive(Default)]
@@ -66,8 +67,12 @@ pub struct FakeSession {
 }
 
 impl Recording for FakeSession {
-    fn stop(self: Box<Self>) -> io::Result<(PathBuf, String)> {
-        std::thread::sleep(self.stop_delay);
+    fn stop(self: Box<Self>, hurry: &Hurry) -> io::Result<(PathBuf, String)> {
+        // como la de verdad: tarda lo suyo, salvo que haya prisa y venza el plazo
+        let end = Instant::now() + self.stop_delay;
+        while Instant::now() < end && hurry.deadline().is_none_or(|d| Instant::now() < d) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         self.stopped.store(true, Ordering::SeqCst);
         self.stop_ends.lock().unwrap().push(Instant::now());
         Ok((PathBuf::from(format!("{}.md", self.label)), self.text))
@@ -111,6 +116,7 @@ impl Notifier for Notes {
 }
 
 pub type Hook = Box<dyn Fn(&App, &AppEvent) + Send + Sync>;
+pub type SaveHook = Arc<dyn Fn(&Settings) + Send + Sync>;
 
 pub struct Harness {
     pub app: Arc<App>,
@@ -121,6 +127,10 @@ pub struct Harness {
     pub copied: Arc<Mutex<Vec<String>>>,
     pub events: Arc<Mutex<Vec<AppEvent>>>,
     pub saved: Arc<AtomicUsize>,
+    /// Lo que se guardó, en orden.
+    pub saves: Arc<Mutex<Vec<Settings>>>,
+    /// Se llama al guardar, antes de anotarlo.
+    pub save_hook: Arc<Mutex<Option<SaveHook>>>,
     pub hook: Arc<Mutex<Option<Hook>>>,
     pub stop_delay: Arc<Mutex<Duration>>,
     pub stop_ends: Arc<Mutex<Vec<Instant>>>,
@@ -145,6 +155,8 @@ pub fn harness_with(settings: Settings, text: &str) -> Harness {
     let copied = Arc::new(Mutex::new(Vec::new()));
     let events = Arc::new(Mutex::new(Vec::new()));
     let saved = Arc::new(AtomicUsize::new(0));
+    let saves = Arc::new(Mutex::new(Vec::new()));
+    let save_hook: Arc<Mutex<Option<SaveHook>>> = Arc::new(Mutex::new(None));
     let hook: Arc<Mutex<Option<Hook>>> = Arc::new(Mutex::new(None));
     let stop_delay = Arc::new(Mutex::new(Duration::ZERO));
     let stop_ends = Arc::new(Mutex::new(Vec::new()));
@@ -166,6 +178,7 @@ pub fn harness_with(settings: Settings, text: &str) -> Harness {
         hook.clone(),
         weak.clone(),
     );
+    let (sl, sh) = (saves.clone(), save_hook.clone());
     let deps = AppDeps {
         detector: Box::new(move |on_start, on_stop| {
             *d.on_start.lock().unwrap() = Some(on_start);
@@ -205,8 +218,14 @@ pub fn harness_with(settings: Settings, text: &str) -> Harness {
             }
             ev.lock().unwrap().push(e);
         }),
-        save: Box::new(move |_s| {
+        save: Box::new(move |s| {
             sv.fetch_add(1, Ordering::SeqCst);
+            // se suelta antes de llamarlo: un guardado a la vez lo decide la app, no el test
+            let hook = sh.lock().unwrap().clone();
+            if let Some(f) = hook {
+                f(s);
+            }
+            sl.lock().unwrap().push(s.clone());
             Ok(())
         }),
     };
@@ -222,6 +241,8 @@ pub fn harness_with(settings: Settings, text: &str) -> Harness {
         copied,
         events,
         saved,
+        saves,
+        save_hook,
         hook,
         stop_delay,
         stop_ends,

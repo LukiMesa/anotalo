@@ -7,6 +7,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread::{self, ThreadId};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -15,6 +16,7 @@ use crate::detector::{Detected, DetectorControl, OnDetected};
 use crate::model::ModelGate;
 use crate::notify::Notifier;
 use crate::routing::Audio;
+use crate::session::Hurry;
 use crate::source::OthersSpec;
 use crate::transcript::fmt_elapsed;
 
@@ -48,10 +50,14 @@ pub const NOTE_LABEL: &str = "Nota";
 /// Llamada grabada a mano ("Manual" ya es una etiqueta de nota antigua).
 pub const CALL_LABEL: &str = "Llamada";
 
+/// Cuánto se espera, como mucho, a lo que queda por transcribir si Windows se apaga a la fuerza.
+pub const FAST_QUIT_WAIT: Duration = Duration::from_secs(2);
+
 /// Una grabación en curso.
 pub trait Recording: Send {
-    /// Para, transcribe lo pendiente y cierra el archivo: (ruta, solo lo dicho).
-    fn stop(self: Box<Self>) -> io::Result<(PathBuf, String)>;
+    /// Para, transcribe lo pendiente y cierra el archivo: (ruta, solo lo dicho). Con prisa
+    /// (`hurry`), deja de esperar a lo pendiente en el plazo.
+    fn stop(self: Box<Self>, hurry: &Hurry) -> io::Result<(PathBuf, String)>;
     /// Marca en este momento; el segundo de la grabación, o None si no se pudo.
     fn mark(&self) -> Option<f64>;
 }
@@ -146,6 +152,10 @@ pub struct App {
     copy_text: CopyText,
     events: EventSink,
     save: SaveSettings,
+    /// Los ajustes se guardan de uno en uno.
+    saving: Mutex<()>,
+    /// Prisa para cerrar las grabaciones (Windows se apaga a la fuerza).
+    hurry: Hurry,
     appliers: Mutex<HashMap<String, Applier>>,
     after_apply: Mutex<HashMap<String, AfterApply>>,
 }
@@ -184,6 +194,8 @@ impl App {
                 copy_text: deps.copy_text,
                 events: deps.events,
                 save: deps.save,
+                saving: Mutex::new(()),
+                hurry: Hurry::default(),
                 appliers: Mutex::new(HashMap::new()),
                 after_apply: Mutex::new(HashMap::new()),
             }
@@ -274,6 +286,13 @@ impl App {
         if self.data().session.is_some() {
             self.stop_session(true);
         }
+    }
+
+    /// Como `quit`, cuando Windows se apaga a la fuerza: no se espera más de `FAST_QUIT_WAIT` a
+    /// lo que quede por transcribir (tampoco si ya se estaba guardando una grabación).
+    pub fn quit_fast(&self) {
+        self.hurry.within(FAST_QUIT_WAIT);
+        self.quit();
     }
 
     // --- acciones ------------------------------------------------------------
@@ -507,7 +526,7 @@ impl App {
             label: label.clone(),
         });
         let (mut path, mut copied) = (None, false);
-        match session.stop() {
+        match session.stop(&self.hurry) {
             Ok((p, text)) => {
                 if label == NOTE_LABEL {
                     copied = copy_on_stop && self.copy_note(&text);
@@ -607,8 +626,12 @@ impl App {
                 self.data().settings.set_field(key, value.clone())?;
             }
         }
-        if let Err(e) = (self.save)(&self.settings()) {
-            log::error!("No se pudieron guardar los ajustes: {e}");
+        {
+            // la copia se toma con el turno de guardar: el último guardado lleva todos los cambios
+            let _turn = self.saving.lock().unwrap_or_else(|e| e.into_inner());
+            if let Err(e) = (self.save)(&self.settings()) {
+                log::error!("No se pudieron guardar los ajustes: {e}");
+            }
         }
         if let Some(after) = self
             .after_apply

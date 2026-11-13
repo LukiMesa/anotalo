@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::engine::Transcriber;
 use crate::segmenter::{Segment, Segmenter, SegmenterConfig, VadFn};
@@ -28,6 +28,26 @@ const LEVEL_INTERVAL_S: f64 = 0.05;
 const TICK: Duration = Duration::from_millis(500);
 const RETRY_DELAY_S: f64 = 1.0;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Prisa para cerrar (Windows se apaga a la fuerza): la espera a lo que queda por transcribir acaba
+/// en el plazo, también la de una parada que ya estaba esperando. Se pierden las últimas frases, no
+/// el archivo: se cierra igual, con su `- Fin:` y su `- Duración:`.
+#[derive(Clone, Default)]
+pub struct Hurry(Arc<Mutex<Option<Instant>>>);
+
+impl Hurry {
+    /// Que las paradas no esperen más de `wait` desde ahora.
+    pub fn within(&self, wait: Duration) {
+        let end = Instant::now() + wait;
+        let mut d = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        *d = Some(d.map_or(end, |old| old.min(end)));
+    }
+
+    /// Hasta cuándo se puede esperar, si hay prisa.
+    pub fn deadline(&self) -> Option<Instant> {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 pub struct SessionConfig {
     pub output_dir: PathBuf,
@@ -370,16 +390,17 @@ impl CallSession {
 
     /// Para las fuentes, transcribe lo pendiente (hasta 60 s) y cierra el archivo.
     pub fn stop(mut self) -> io::Result<PathBuf> {
-        self.shutdown()
+        self.shutdown(&Hurry::default())
     }
 
-    /// Como `stop`, y además lo dicho (para copiarlo), ya con las últimas frases.
-    pub fn stop_with_text(mut self) -> io::Result<(PathBuf, String)> {
-        let path = self.shutdown()?;
+    /// Como `stop`, y además lo dicho (para copiarlo), ya con las últimas frases. `hurry` puede
+    /// acortar la espera desde otro hilo.
+    pub fn stop_with_text(mut self, hurry: &Hurry) -> io::Result<(PathBuf, String)> {
+        let path = self.shutdown(hurry)?;
         Ok((path, self.plain_text()))
     }
 
-    fn shutdown(&mut self) -> io::Result<PathBuf> {
+    fn shutdown(&mut self, hurry: &Hurry) -> io::Result<PathBuf> {
         let Some(ticker) = self.ticker.take() else {
             return Ok(self.path().to_path_buf());
         };
@@ -393,7 +414,9 @@ impl CallSession {
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
-        if !self.transcriber.wait_idle(IDLE_TIMEOUT) {
+        let end = Instant::now() + IDLE_TIMEOUT;
+        let deadline = || hurry.deadline().map_or(end, |h| h.min(end));
+        if !self.transcriber.wait_idle_until(&deadline) {
             // lo que quede ya no llegaría al archivo (se cierra ahora): no se gasta más tiempo en ello
             let dropped = self.transcriber.cancel_pending();
             log::warn!("Se cierra la transcripción con {dropped} frases sin transcribir");
@@ -425,7 +448,7 @@ impl CallSession {
 
 impl Drop for CallSession {
     fn drop(&mut self) {
-        if let Err(e) = self.shutdown() {
+        if let Err(e) = self.shutdown(&Hurry::default()) {
             log::error!("No se pudo cerrar la transcripción: {e}");
         }
     }

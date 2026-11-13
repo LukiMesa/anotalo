@@ -3,12 +3,14 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anotalo_core::engine::{Asr, Transcriber};
 use anotalo_core::models::Placement;
 use anotalo_core::segmenter::VadFn;
-use anotalo_core::session::{CallSession, OnLevel, OnLine, SessionConfig, SourceFactory, Speakers};
+use anotalo_core::session::{
+    CallSession, Hurry, OnLevel, OnLine, SessionConfig, SourceFactory, Speakers,
+};
 use anotalo_core::source::{AudioSource, OnAudio, now_s};
 use anotalo_core::speaker::embed::Embed;
 use anotalo_core::speaker::memory::StoredVoice;
@@ -278,9 +280,51 @@ fn test_plain_text_session() {
 fn test_stop_with_text_includes_flushed_lines() {
     let d = tempfile::tempdir().unwrap();
     let sess = start(d.path(), FakeSource::new(&[0.5]), None, None, None, None);
-    let (path, text) = sess.stop_with_text().unwrap();
+    let (path, text) = sess.stop_with_text(&Hurry::default()).unwrap();
     assert_eq!(text, "texto");
     assert!(read(&path).contains("- Duración:"));
+}
+
+/// Un procesador que no da abasto: cada frase tarda `0`.
+struct SlowAsr(Duration);
+
+impl Asr for SlowAsr {
+    fn transcribe(&mut self, pcm: &[f32]) -> Result<Vec<Text>, String> {
+        std::thread::sleep(self.0);
+        EchoAsr.transcribe(pcm)
+    }
+}
+
+/// Windows se apaga a la fuerza con frases por transcribir (8 s de trabajo): el archivo se cierra
+/// en el plazo, con su `- Fin:` y su `- Duración:`, aunque se pierdan las últimas frases.
+#[test]
+fn test_hurried_stop_closes_the_file_in_time() {
+    let d = tempfile::tempdir().unwrap();
+    let factory = Box::new(|_| Ok(Box::new(SlowAsr(Duration::from_secs(2))) as Box<dyn Asr>));
+    let asr = Arc::new(Transcriber::start(Placement::Cpu, factory, Box::new(|_| {})).unwrap());
+    let sess = CallSession::start(
+        cfg(d.path(), "Teams"),
+        // el gestor del modelo también lo tiene: soltar la sesión no espera al motor
+        asr.clone(),
+        Box::new(FakeSource::new(&[0.5, 2.5, 4.5, 6.5])),
+        None,
+        None,
+        None,
+        None,
+        fake_vad(),
+    )
+    .unwrap();
+    let hurry = Hurry::default();
+    hurry.within(Duration::from_millis(500));
+    let t0 = Instant::now();
+    let (path, _) = sess.stop_with_text(&hurry).unwrap();
+    let took = t0.elapsed();
+    let text = read(&path);
+    assert!(took < Duration::from_secs(2), "tardó {took:?}");
+    assert!(
+        text.contains("- Fin:") && text.contains("- Duración:"),
+        "{text}"
+    );
 }
 
 #[test]

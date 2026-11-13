@@ -77,9 +77,13 @@ impl World {
     }
     /// Avanza el reloj de 2 en 2 s llamando a tick(), como el bucle real.
     fn advance(&self, d: &mut CallDetector, seconds: f64) {
+        self.advance_by(d, seconds, 2.0);
+    }
+    /// Como `advance`, de `step` en `step` segundos.
+    fn advance_by(&self, d: &mut CallDetector, seconds: f64, step: f64) {
         let end = self.0.lock().unwrap().t + seconds;
         while self.0.lock().unwrap().t < end {
-            self.0.lock().unwrap().t += 2.0;
+            self.0.lock().unwrap().t += step;
             d.tick();
         }
     }
@@ -379,18 +383,21 @@ fn test_site_from_title() {
 
 #[test]
 fn test_release_resets_when_mic_returns_at_9s() {
-    // Silenciar y reactivar el micro a mitad de llamada: la gracia de 10 s vuelve a empezar.
+    // Silenciar y reactivar el micro a mitad de llamada: la gracia de 10 s vuelve a empezar. Se
+    // sondea cada segundo: con el paso de 2 s, "9 s" serían 8.
     let w = World::default();
     let mut d = w.detector();
     w.set_mic(&[TEAMS]);
     w.advance(&mut d, 8.0);
     w.set_mic(&[]);
-    w.advance(&mut d, 8.0); // 8 s sin micro
+    w.advance_by(&mut d, 10.0, 1.0); // el primer sondeo sin micro y 9 s más
     w.set_mic(&[TEAMS]);
-    w.advance(&mut d, 2.0); // vuelve un momento
+    w.advance_by(&mut d, 1.0, 1.0); // vuelve justo antes de los 10 s
     w.set_mic(&[]);
-    w.advance(&mut d, 8.0); // otros 8 s: no son 10 seguidos
+    w.advance_by(&mut d, 10.0, 1.0); // otros 9 s: no son 10 seguidos
     assert_eq!(w.events(), vec![ev("start", "Teams")]);
+    w.advance_by(&mut d, 1.0, 1.0); // el décimo sí
+    assert_eq!(w.events(), vec![ev("start", "Teams"), ev("stop", "Teams")]);
 }
 
 #[test]

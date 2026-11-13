@@ -1,6 +1,6 @@
 //! El indicador de grabación (port de calltx/ui/indicator.py): una píldora abajo al centro, siempre
 //! encima, que no roba el foco y deja pasar los clics. Es una ventana Win32 "layered" con
-//! transparencia por píxel, en su propio hilo a 30 fps.
+//! transparencia por píxel, en su propio hilo: 30 fps mientras se ve, dormido mientras no.
 //!
 //! - `PillModel`: qué se ve en cada momento (entrada, salida, "Marcado" 1,2 s…), sin Windows.
 //! - `IndicatorWiring`: qué mostrar según los avisos de la app.
@@ -8,7 +8,7 @@
 
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -16,13 +16,16 @@ use std::time::Instant;
 
 use anotalo_core::app::AppEvent;
 use tiny_skia::Pixmap;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, CloseHandle, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WAIT_FAILED, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
     AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
     CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HGDIOBJ,
     ReleaseDC, SelectObject,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent};
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, SetThreadDpiAwarenessContext,
 };
@@ -35,7 +38,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     WS_POPUP,
 };
-use windows::core::w;
+use windows::core::{PCWSTR, w};
 
 use super::pill::{EXIT_S, PillState, enter_frame, exit_alpha, render_pill};
 
@@ -230,43 +233,84 @@ enum Msg {
     Quit,
 }
 
+/// Despierta al hilo del indicador cuando hay una orden: oculto, duerme hasta entonces.
+struct Wake(HANDLE);
+
+// SAFETY: un evento de Windows se puede señalar y esperar desde cualquier hilo.
+unsafe impl Send for Wake {}
+unsafe impl Sync for Wake {}
+
+impl Drop for Wake {
+    fn drop(&mut self) {
+        // SAFETY: evento propio, cerrado una vez (al soltar el último `Arc`).
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
+
 /// La ventana del indicador en su hilo.
 pub struct Indicator {
     tx: Sender<Msg>,
+    /// None si no se pudo crear el evento: entonces el hilo mira las órdenes 30 veces por segundo.
+    wake: Option<Arc<Wake>>,
     levels: Arc<Mutex<VecDeque<f32>>>,
-    thread: Option<JoinHandle<()>>,
+    thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Indicator {
     pub fn spawn() -> Indicator {
-        Indicator::spawn_with(render_pill)
+        Indicator::spawn_with(render_pill, Arc::default())
     }
 
-    fn spawn_with(render: Render) -> Indicator {
+    /// `wakes`: vueltas del bucle de la ventana (para los tests).
+    fn spawn_with(render: Render, wakes: Arc<AtomicUsize>) -> Indicator {
         let (tx, rx) = mpsc::channel();
         let levels = Arc::new(Mutex::new(VecDeque::from(vec![0.0; 6])));
-        let lv = levels.clone();
+        // SAFETY: evento sin nombre, de reinicio automático; lo cierra `Wake`.
+        let wake = unsafe { CreateEventW(None, false, false, PCWSTR::null()) }
+            .ok()
+            .map(|h| Arc::new(Wake(h)));
+        let (lv, wk) = (levels.clone(), wake.clone());
         let thread = std::thread::Builder::new()
             .name("indicador".into())
-            .spawn(move || window_loop(&rx, &lv, render))
+            .spawn(move || window_loop(&rx, &lv, wk.as_deref(), render, &wakes))
             .ok();
-        Indicator { tx, levels, thread }
+        Indicator {
+            tx,
+            wake,
+            levels,
+            thread: Mutex::new(thread),
+        }
+    }
+
+    fn post(&self, m: Msg) {
+        let _ = self.tx.send(m);
+        if let Some(w) = &self.wake {
+            // SAFETY: evento propio, vivo mientras viva `self`.
+            let _ = unsafe { SetEvent(w.0) };
+        }
     }
 
     fn send(&self, c: Cmd) {
-        let _ = self.tx.send(Msg::Cmd(c));
+        self.post(Msg::Cmd(c));
     }
 
-    pub fn close(mut self) {
-        let _ = self.tx.send(Msg::Quit);
-        if let Some(t) = self.thread.take() {
+    /// Cierra la ventana y espera a su hilo (aunque otros aún tengan el indicador: lo que le
+    /// pidan después no hace nada).
+    pub fn close(&self) {
+        self.post(Msg::Quit);
+        let thread = self.thread.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(t) = thread {
             let _ = t.join();
         }
     }
 
     #[cfg(test)]
     fn alive(&self) -> bool {
-        self.thread.as_ref().is_some_and(|t| !t.is_finished())
+        self.thread
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|t| !t.is_finished())
     }
 }
 
@@ -295,6 +339,12 @@ impl Pill for Indicator {
     }
 }
 
+/// Al salir: la píldora se oculta y la ventana del indicador se cierra (el cableado aún la tiene).
+pub fn shut_down(ind: Arc<Indicator>, wiring: &IndicatorWiring) {
+    wiring.set_enabled(false);
+    ind.close();
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     // SAFETY: procedimiento por defecto de Windows.
     unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
@@ -315,7 +365,15 @@ fn animations_enabled() -> bool {
     ok.is_err() || v != 0
 }
 
-fn window_loop(rx: &Receiver<Msg>, levels: &Mutex<VecDeque<f32>>, render: Render) {
+/// Mientras se ve la píldora, 30 fotogramas por segundo; oculta, el hilo duerme hasta que llega una
+/// orden (`wake`) o un mensaje de la ventana.
+fn window_loop(
+    rx: &Receiver<Msg>,
+    levels: &Mutex<VecDeque<f32>>,
+    wake: Option<&Wake>,
+    render: Render,
+    wakes: &AtomicUsize,
+) {
     // SAFETY: ventana de este hilo; se destruye al salir.
     unsafe {
         let _ = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -351,10 +409,28 @@ fn window_loop(rx: &Receiver<Msg>, levels: &Mutex<VecDeque<f32>>, render: Render
         let mut model = PillModel::default();
         let mut shown = [0.0f32; 6];
         let mut visible = false;
+        // la píldora tiene algo que mostrar (aunque un fotograma fallido no la haya pintado)
+        let mut animating = false;
         let mut last = 0.0f64;
         let mut msg = MSG::default();
+        let handles = wake.map(|w| [w.0]);
         loop {
-            MsgWaitForMultipleObjects(None, false, 1000 / FPS, QS_ALLINPUT);
+            let frame_ms = 1000 / FPS;
+            let timeout = if animating || handles.is_none() {
+                frame_ms
+            } else {
+                INFINITE
+            };
+            let r = MsgWaitForMultipleObjects(
+                handles.as_ref().map(|h| h.as_slice()),
+                false,
+                timeout,
+                QS_ALLINPUT,
+            );
+            if r == WAIT_FAILED {
+                std::thread::sleep(std::time::Duration::from_millis(u64::from(frame_ms)));
+            }
+            wakes.fetch_add(1, Ordering::Relaxed);
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
@@ -378,12 +454,14 @@ fn window_loop(rx: &Receiver<Msg>, levels: &Mutex<VecDeque<f32>>, render: Render
                 }
             }
             let Some(f) = model.frame(now, animations_enabled()) else {
+                animating = false;
                 if visible {
                     let _ = ShowWindow(hwnd, SW_HIDE);
                     visible = false;
                 }
                 continue;
             };
+            animating = true;
             // barras: suben rápido, bajan en ~120 ms
             let target: Vec<f32> = levels
                 .lock()
@@ -651,12 +729,45 @@ mod tests {
     #[test]
     #[ignore]
     fn test_render_error_does_not_kill_indicator() {
-        let ind = Indicator::spawn_with(flaky);
+        let ind = Indicator::spawn_with(flaky, Arc::default());
         ind.show_recording();
         std::thread::sleep(std::time::Duration::from_millis(400));
         let alive = ind.alive();
         ind.close();
         assert!(alive);
         assert!(RENDERS.load(Ordering::SeqCst) > 1);
+    }
+
+    /// Al salir se cierra la ventana aunque el cableado (los avisos de la app) aún la tenga.
+    /// Crea una ventana (oculta): `cargo test --release -p anotalo -- --ignored indicator`
+    #[test]
+    #[ignore]
+    fn test_shut_down_closes_the_window_held_by_the_wiring() {
+        let ind = Arc::new(Indicator::spawn());
+        let wiring = IndicatorWiring::new(true, ind.clone() as Arc<dyn Pill>);
+        let watch = Arc::downgrade(&ind);
+        assert!(ind.alive());
+        shut_down(ind, &wiring);
+        assert!(
+            !watch.upgrade().is_some_and(|i| i.alive()),
+            "la ventana del indicador sigue abierta"
+        );
+    }
+
+    /// Oculto, el hilo duerme hasta que llega una orden (no 30 veces por segundo todo el día).
+    #[test]
+    #[ignore]
+    fn test_hidden_indicator_sleeps_until_a_command() {
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let ind = Indicator::spawn_with(render_pill, wakes.clone());
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let idle = wakes.load(Ordering::SeqCst);
+        assert!(idle <= 3, "{idle} vueltas en 0,6 s sin nada que mostrar");
+        ind.hide();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let after = wakes.load(Ordering::SeqCst);
+        assert!(after > idle, "una orden lo despierta");
+        assert!(after <= idle + 3, "y vuelve a dormir: {after}");
+        ind.close();
     }
 }

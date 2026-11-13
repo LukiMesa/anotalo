@@ -10,8 +10,8 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
-use std::time::Instant;
+use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
+use std::time::{Duration, Instant};
 
 use anotalo_core::app::{
     App, AppDeps, AppEvent, DetectorFactory, EventSink, Recording, SessionFactory, SessionRequest,
@@ -22,15 +22,17 @@ use anotalo_core::config::{
     LoadProblem, Settings, config_path, load_settings_checked, migrate_legacy, save_settings,
 };
 use anotalo_core::detector::{
-    CallDetector, DetectorControl, DetectorHandle, MicProbe, POLL, Probes,
+    CallDetector, DetectorControl, DetectorHandle, MicProbe, POLL, Probes, meeting_title,
 };
 use anotalo_core::engine::whisper_factory;
 use anotalo_core::model::{ModelConfig, ModelGate, ModelManager, igpu_check_needed};
 use anotalo_core::models::{HttpFetch, choose, models_dir};
 use anotalo_core::notify::Notifier;
 use anotalo_core::paths::{self, Profile};
-use anotalo_core::routing::Platform;
-use anotalo_core::session::{CallSession, OnLevel, OnLine, SessionConfig, SourceFactory, Speakers};
+use anotalo_core::routing::{Platform, site_from_title};
+use anotalo_core::session::{
+    CallSession, Hurry, OnLevel, OnLine, SessionConfig, SourceFactory, Speakers,
+};
 use anotalo_core::speaker::memory::{VoiceStore, prune_voice_backups, voices_path};
 use anotalo_core::speaker::model::SpeakerModel;
 use anotalo_core::speaker::naming::{KEEP_CALL_PRINTS, prune_call_prints};
@@ -41,17 +43,19 @@ use anotalo_winsys::{clipboard, consent, instance, toast};
 use serde_json::Value;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
-use windows::Win32::System::Shutdown::ShutdownBlockReasonCreate;
+use windows::Win32::System::Shutdown::{ShutdownBlockReasonCreate, ShutdownBlockReasonDestroy};
+use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    KillTimer, PostQuitMessage, SW_SHOWNORMAL, SetTimer, WM_COMMAND, WM_CONTEXTMENU, WM_ENDSESSION,
-    WM_HOTKEY, WM_LBUTTONUP, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_TIMER,
+    ENDSESSION_CRITICAL, KillTimer, PostQuitMessage, SW_SHOWNORMAL, SetTimer, WM_COMMAND,
+    WM_CONTEXTMENU, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONUP, WM_QUERYENDSESSION, WM_RBUTTONUP,
+    WM_TIMER,
 };
 use windows::core::{HSTRING, w};
 
 use crate::record::vad_factory;
 use crate::shell::hotkeys::{HotkeyId, Hotkeys};
-use crate::shell::indicator::{Indicator, IndicatorWiring, Pill};
+use crate::shell::indicator::{Indicator, IndicatorWiring, Pill, shut_down};
 use crate::shell::tray::{Tray, TrayCommand, WM_APP_TRAY, menu_items};
 use crate::shell::window::{self, Handler, WM_APP_EVENT, WM_APP_QUIT_DONE};
 use crate::voices_cli::prints_dir;
@@ -59,6 +63,13 @@ use crate::voices_cli::prints_dir;
 /// Cada 30 s se mira si el modelo lleva tiempo sin usarse (para liberarlo).
 const MODEL_TIMER: usize = 1;
 const MODEL_TICK_MS: u32 = 30_000;
+/// Si el icono no entra en la bandeja (el Explorador aún ocupado al iniciar sesión), se reintenta
+/// cada 5 s durante un minuto; después, solo cuando el Explorador avise de que arrancó.
+const TRAY_TIMER: usize = 2;
+const TRAY_RETRY_MS: u32 = 5_000;
+const TRAY_RETRIES: u32 = 12;
+/// Al salir con "Salir", lo que se espera a que se vean los avisos pendientes.
+const TOASTS_WAIT: Duration = Duration::from_secs(3);
 
 /// Las piezas se crean antes que la app (el detector y el modelo van dentro de ella): leen los
 /// ajustes a través de esto, que apunta a la app en cuanto existe.
@@ -79,8 +90,58 @@ impl AppRef {
     }
 }
 
-/// Avisos del sistema, en otro hilo (WinRT tarda un poco y no debe frenar a nadie).
-struct Toasts;
+/// Muestra un aviso: título, texto y el archivo que abre al pulsarlo.
+type ShowToast = Arc<dyn Fn(&str, &str, Option<&Path>) -> Result<(), String> + Send + Sync>;
+
+/// Cuántos avisos se están mostrando aún.
+type Counter = Arc<(Mutex<usize>, Condvar)>;
+
+/// Avisos del sistema, en otro hilo (WinRT tarda un poco y no debe frenar a nadie). Al salir se
+/// espera un poco a los que aún se están mostrando ("Transcripción guardada" tras "Salir").
+struct Toasts {
+    show: ShowToast,
+    showing: Counter,
+}
+
+/// Un aviso en curso: cuenta mientras vive (se descuenta también si el aviso falla).
+struct Showing(Counter);
+
+impl Showing {
+    fn new(c: &Counter) -> Showing {
+        *c.0.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        Showing(c.clone())
+    }
+}
+
+impl Drop for Showing {
+    fn drop(&mut self) {
+        *self.0.0.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+        self.0.1.notify_all();
+    }
+}
+
+impl Toasts {
+    fn new() -> Toasts {
+        Toasts::with(Arc::new(|t, b, o| toast::show(toast::AUMID, t, b, o)))
+    }
+
+    fn with(show: ShowToast) -> Toasts {
+        Toasts {
+            show,
+            showing: Arc::default(),
+        }
+    }
+
+    /// Espera, como mucho `timeout`, a que terminen de mostrarse los avisos. false si no dio tiempo.
+    fn wait(&self, timeout: Duration) -> bool {
+        let (n, done) = &*self.showing;
+        let n = n.lock().unwrap_or_else(|e| e.into_inner());
+        let (n, _) = done
+            .wait_timeout_while(n, timeout, |n| *n > 0)
+            .unwrap_or_else(|e| e.into_inner());
+        *n == 0
+    }
+}
 
 impl Notifier for Toasts {
     fn notify(&self, title: &str, body: &str, open: Option<&Path>) {
@@ -90,13 +151,43 @@ impl Notifier for Toasts {
             body.to_string(),
             open.map(Path::to_path_buf),
         );
+        let (show, showing) = (self.show.clone(), Showing::new(&self.showing));
         let _ = std::thread::Builder::new()
             .name("aviso".into())
             .spawn(move || {
-                if let Err(e) = toast::show(toast::AUMID, &t, &b, o.as_deref()) {
+                let _showing = showing;
+                if let Err(e) = show(&t, &b, o.as_deref()) {
                     log::warn!("No se pudo mostrar el aviso: {e}");
                 }
             });
+    }
+}
+
+/// Para no repetir una acción por un doble clic (que son dos clics).
+struct Debounce {
+    gap: Duration,
+    last: Cell<Option<Instant>>,
+}
+
+impl Debounce {
+    fn new(gap: Duration) -> Debounce {
+        Debounce {
+            gap,
+            last: Cell::new(None),
+        }
+    }
+
+    /// true si la acción va: la anterior fue hace `gap` o más.
+    fn ready(&self, now: Instant) -> bool {
+        if self
+            .last
+            .get()
+            .is_some_and(|l| now.saturating_duration_since(l) < self.gap)
+        {
+            return false;
+        }
+        self.last.set(Some(now));
+        true
     }
 }
 
@@ -104,8 +195,8 @@ impl Notifier for Toasts {
 struct Live(CallSession);
 
 impl Recording for Live {
-    fn stop(self: Box<Self>) -> io::Result<(PathBuf, String)> {
-        self.0.stop_with_text()
+    fn stop(self: Box<Self>, hurry: &Hurry) -> io::Result<(PathBuf, String)> {
+        self.0.stop_with_text(hurry)
     }
 
     fn mark(&self) -> Option<f64> {
@@ -245,6 +336,15 @@ fn log_audio(
     log::info!("Sonando: {}", describe(&coreaudio::render_snapshot()));
 }
 
+/// Los títulos que dicen algo de la llamada (el sitio o la reunión) y los demás: en un navegador,
+/// la pestaña de cada una de sus ventanas (asuntos de correos…), que no van a app.log (M3 permite
+/// copiarlo) salvo con el registro detallado.
+fn split_titles<'a>(p: &Platform, titles: &'a [String]) -> (Vec<&'a str>, Vec<&'a str>) {
+    titles.iter().map(String::as_str).partition(|t| {
+        site_from_title(t).is_some() || meeting_title(p, &[(*t).to_string()]).is_some()
+    })
+}
+
 fn detector(r: AppRef) -> DetectorFactory {
     Box::new(move |on_start, on_stop| {
         let probe = MicProbe::default();
@@ -266,7 +366,11 @@ fn detector(r: AppRef) -> DetectorFactory {
         // solo al detectar una llamada; los títulos sirven para casos de prueba de `meeting_title`
         let windows = Box::new(|p: &'static Platform| {
             let titles = anotalo_winsys::windows::visible_titles(p.exes);
-            log::info!("Ventanas de {}: {titles:?}", p.name);
+            let (useful, rest) = split_titles(p, &titles);
+            log::info!("Ventanas de {}: {useful:?} y {} más", p.name, rest.len());
+            if !rest.is_empty() {
+                log::debug!("Las demás ventanas de {}: {rest:?}", p.name);
+            }
             titles
         });
         let enabled = Box::new(move |p: &Platform| r.settings().detect_enabled(p.setting));
@@ -283,10 +387,10 @@ fn model_manager(r: &AppRef, notifier: Arc<dyn Notifier>) -> Arc<ModelManager> {
     let (rf, rp, rc, rs, ro) = (r.clone(), r.clone(), r.clone(), r.clone(), r.clone());
     let (dp, dc) = (devices.clone(), devices);
     let cfg = ModelConfig {
-        factory: Box::new(move |progress| {
+        factory: Box::new(move |pick, progress| {
             let s = rf.settings();
             whisper_factory(
-                s.model,
+                pick.map_or(s.model, String::from),
                 s.language,
                 models_dir(),
                 Arc::new(HttpFetch::default()),
@@ -367,6 +471,11 @@ struct Shell {
     wiring: IndicatorWiring,
     /// Lo último que muestra la bandeja (no se rehace el icono si no cambia).
     shown: Cell<Option<(State, Option<u8>)>>,
+    /// Intentos fallidos seguidos de poner el icono.
+    tray_failures: Cell<u32>,
+    /// El clic en el icono (un doble clic abre la carpeta una sola vez).
+    clicks: Debounce,
+    toasts: Arc<Toasts>,
     quitting: Cell<bool>,
     taskbar_created: u32,
     profile: Profile,
@@ -420,12 +529,34 @@ impl Shell {
             Ok(t) => {
                 log::info!("Icono en la bandeja");
                 *slot = Some(t);
+                self.tray_failures.set(0);
+                // SAFETY: temporizador propio (si no estaba, no pasa nada).
+                let _ = unsafe { KillTimer(Some(self.hwnd()), TRAY_TIMER) };
             }
-            Err(e) => log::warn!("{e}; se reintenta cuando arranque el Explorador"),
+            Err(e) => {
+                // sin icono no se llega a "Salir": se reintenta un rato, no solo con el Explorador
+                let n = self.tray_failures.get() + 1;
+                self.tray_failures.set(n);
+                if n <= TRAY_RETRIES {
+                    log::warn!("{e}; se reintenta en {} s", TRAY_RETRY_MS / 1000);
+                    // SAFETY: temporizador de la ventana propia.
+                    unsafe { SetTimer(Some(self.hwnd()), TRAY_TIMER, TRAY_RETRY_MS, None) };
+                } else {
+                    log::warn!("{e}; se reintenta cuando arranque el Explorador");
+                    // SAFETY: temporizador propio.
+                    let _ = unsafe { KillTimer(Some(self.hwnd()), TRAY_TIMER) };
+                }
+            }
         }
         drop(slot);
         self.shown.set(None);
         self.show_state(self.app.state());
+    }
+
+    /// Quita el "Guardando la transcripción…" de la pantalla de apagado, si estaba.
+    fn unblock_shutdown(&self) {
+        // SAFETY: ventana propia, de este hilo; si no había motivo, falla sin más.
+        let _ = unsafe { ShutdownBlockReasonDestroy(self.hwnd()) };
     }
 
     fn menu(&self) {
@@ -464,10 +595,14 @@ impl Shell {
         }
     }
 
-    /// Quita el icono, los atajos y el indicador.
+    /// Quita el icono, los atajos, el indicador y el motivo de bloqueo del apagado.
     fn teardown(&self) {
-        // SAFETY: temporizador propio.
-        let _ = unsafe { KillTimer(Some(self.hwnd()), MODEL_TIMER) };
+        // SAFETY: temporizadores propios.
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd()), MODEL_TIMER);
+            let _ = KillTimer(Some(self.hwnd()), TRAY_TIMER);
+        }
+        self.unblock_shutdown();
         if let Ok(mut h) = self.hotkeys.try_borrow_mut() {
             h.take();
         }
@@ -475,10 +610,7 @@ impl Shell {
             t.take();
         }
         if let Some(ind) = self.indicator.borrow_mut().take() {
-            self.wiring.set_enabled(false);
-            if let Ok(ind) = Arc::try_unwrap(ind) {
-                ind.close();
-            }
+            shut_down(ind, &self.wiring);
         }
     }
 }
@@ -489,8 +621,10 @@ impl Handler for Shell {
             WM_APP_EVENT => self.drain(),
             WM_APP_TRAY => match (lp.0 as u32) & 0xFFFF {
                 WM_RBUTTONUP | WM_CONTEXTMENU => self.menu(),
-                // hasta que haya ventana (M3), el clic abre las grabaciones
-                WM_LBUTTONUP => self.command(TrayCommand::OpenFolder),
+                // hasta que haya ventana (M3), el clic abre las grabaciones (el doble, una vez)
+                WM_LBUTTONUP if self.clicks.ready(Instant::now()) => {
+                    self.command(TrayCommand::OpenFolder);
+                }
                 _ => {}
             },
             WM_COMMAND => {
@@ -509,6 +643,14 @@ impl Handler for Shell {
                 let model = self.model.clone();
                 in_background("liberar modelo", move || model.tick(Instant::now()));
             }
+            WM_TIMER if wp.0 == TRAY_TIMER => {
+                if self.tray.borrow().is_none() {
+                    self.add_tray();
+                } else {
+                    // SAFETY: temporizador propio.
+                    let _ = unsafe { KillTimer(Some(self.hwnd()), TRAY_TIMER) };
+                }
+            }
             WM_QUERYENDSESSION => {
                 if self.app.recording_active() {
                     // SAFETY: ventana propia; el texto se copia.
@@ -518,18 +660,38 @@ impl Handler for Shell {
                 }
                 return Some(LRESULT(1));
             }
-            // Windows cierra el proceso al volver de aquí: la grabación se guarda antes
-            WM_ENDSESSION if wp.0 != 0 => {
-                log::info!("Windows se cierra: se guarda lo que haya");
-                self.app.quit();
-                self.teardown();
-            }
-            WM_APP_QUIT_DONE => {
+            // el apagado se canceló (otra app lo paró): se sigue como si nada
+            WM_ENDSESSION if wp.0 == 0 => self.unblock_shutdown(),
+            // Windows cierra el proceso al volver de aquí: la grabación se guarda antes. Si no lo
+            // cierra (el gestor de reinicios de un instalador), la app sale sola: sin bandeja ni
+            // atajos no debe quedarse con la instancia única.
+            WM_ENDSESSION => {
+                self.quitting.set(true);
+                if (lp.0 as u32) & ENDSESSION_CRITICAL != 0 {
+                    // hay segundos: mejor perder las últimas frases que el final del archivo
+                    log::info!("Windows se cierra a la fuerza: se guarda lo que haya, ya");
+                    self.app.quit_fast();
+                } else {
+                    log::info!("Windows se cierra: se guarda lo que haya");
+                    self.app.quit();
+                }
                 self.teardown();
                 // SAFETY: cola de este hilo.
                 unsafe { PostQuitMessage(0) };
             }
-            m if m == self.taskbar_created && m != 0 => self.add_tray(),
+            WM_APP_QUIT_DONE => {
+                self.teardown();
+                // que se llegue a ver "Transcripción guardada"
+                if !self.toasts.wait(TOASTS_WAIT) {
+                    log::info!("Se sale sin esperar más a los avisos");
+                }
+                // SAFETY: cola de este hilo.
+                unsafe { PostQuitMessage(0) };
+            }
+            m if m == self.taskbar_created && m != 0 => {
+                self.tray_failures.set(0);
+                self.add_tray();
+            }
             _ => return None,
         }
         Some(LRESULT(0))
@@ -578,7 +740,8 @@ pub fn run() -> ExitCode {
     {
         log::warn!("Los avisos pueden no verse: {e}");
     }
-    let notifier: Arc<dyn Notifier> = Arc::new(Toasts);
+    let toasts = Arc::new(Toasts::new());
+    let notifier: Arc<dyn Notifier> = toasts.clone();
     // un archivo que no se pudo leer no se sobrescribe con los valores por defecto
     let can_save = !matches!(problem, Some(LoadProblem::Unreadable(_)));
     match &problem {
@@ -656,6 +819,18 @@ pub fn run() -> ExitCode {
         },
     );
     let _ = r.cell.set(Arc::downgrade(&app));
+    {
+        // "Liberar el modelo tras…" se aplica en vivo (para la ventana de ajustes)
+        let m = model.clone();
+        app.set_after_apply(
+            "release_after_min",
+            Box::new(move |v| {
+                if let Some(min) = v.as_u64() {
+                    m.set_release_after(Duration::from_secs(min.saturating_mul(60)));
+                }
+            }),
+        );
+    }
     model.prepare();
 
     let mut hotkeys = Hotkeys::new(hwnd);
@@ -679,6 +854,12 @@ pub fn run() -> ExitCode {
         indicator: RefCell::new(Some(indicator.clone())),
         wiring: IndicatorWiring::new(settings.show_indicator, indicator as Arc<dyn Pill>),
         shown: Cell::new(None),
+        tray_failures: Cell::new(0),
+        // SAFETY: sin argumentos.
+        clicks: Debounce::new(Duration::from_millis(u64::from(unsafe {
+            GetDoubleClickTime()
+        }))),
+        toasts,
         quitting: Cell::new(false),
         taskbar_created: window::taskbar_created(),
         profile,
@@ -715,4 +896,78 @@ pub fn run() -> ExitCode {
     log::logger().flush();
     // sin esperar a hilos que ya no hacen falta (el modelo a medio cargar, el detector)
     std::process::exit(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anotalo_core::routing::PLATFORMS;
+    use std::time::Duration;
+
+    fn platform(key: &str) -> &'static Platform {
+        PLATFORMS.iter().find(|p| p.key == key).unwrap()
+    }
+
+    fn titles(t: &[&str]) -> Vec<String> {
+        t.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Al detectar una llamada en el navegador, a app.log solo van los títulos que dicen algo (el
+    /// sitio o la reunión): no las pestañas de las demás ventanas (asuntos de correos…).
+    #[test]
+    fn test_only_matching_titles_are_logged() {
+        let t = titles(&[
+            "Meet - Revisión semanal - Google Chrome",
+            "Re: Factura de octubre - Correo - Google Chrome",
+            "Banco - Movimientos - Google Chrome",
+        ]);
+        let (shown, hidden) = split_titles(platform("chrome"), &t);
+        assert_eq!(shown, vec!["Meet - Revisión semanal - Google Chrome"]);
+        assert_eq!(hidden.len(), 2);
+        let teams = titles(&["Reunión con Acme | Microsoft Teams", "Chat | Contoso"]);
+        let (shown, hidden) = split_titles(platform("teams"), &teams);
+        assert_eq!(shown, vec!["Reunión con Acme | Microsoft Teams"]);
+        assert_eq!(hidden, vec!["Chat | Contoso"]);
+    }
+
+    fn slow_toast(d: Duration) -> Toasts {
+        Toasts::with(Arc::new(move |_, _, _| {
+            std::thread::sleep(d);
+            Ok(())
+        }))
+    }
+
+    /// "Salir" durante una llamada: el aviso "Transcripción guardada" llega a verse.
+    #[test]
+    fn test_quit_waits_for_toasts_being_shown() {
+        let t = slow_toast(Duration::from_millis(300));
+        t.notify("Transcripción guardada", "x.md", None);
+        let t0 = Instant::now();
+        assert!(t.wait(Duration::from_secs(5)));
+        assert!(
+            t0.elapsed() >= Duration::from_millis(250),
+            "{:?}",
+            t0.elapsed()
+        );
+        assert!(t.wait(Duration::ZERO), "ya no queda ninguno");
+    }
+
+    #[test]
+    fn test_toast_wait_is_bounded() {
+        let t = slow_toast(Duration::from_secs(5));
+        t.notify("Transcripción guardada", "x.md", None);
+        let t0 = Instant::now();
+        assert!(!t.wait(Duration::from_millis(200)));
+        assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+    }
+
+    /// Un doble clic en el icono son dos clics: la carpeta se abre una vez.
+    #[test]
+    fn test_double_click_opens_once() {
+        let d = Debounce::new(Duration::from_millis(500));
+        let t0 = Instant::now();
+        assert!(d.ready(t0));
+        assert!(!d.ready(t0 + Duration::from_millis(300)));
+        assert!(d.ready(t0 + Duration::from_millis(1300)));
+    }
 }

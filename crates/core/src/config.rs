@@ -3,8 +3,9 @@
 //! desconocidas se leen y se vuelven a escribir tal cual; las nuevas de Anotalo van al final.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -308,15 +309,22 @@ fn truthy(v: &Value) -> bool {
     }
 }
 
-/// JSON con sangría de 2 espacios y UTF-8 (el formato de la app de Python), escrito en un `.tmp` y
-/// renombrado: un corte a mitad no deja el archivo a medias.
+/// JSON con sangría de 2 espacios y UTF-8 (el formato de la app de Python), escrito en un `.tmp`,
+/// llevado al disco y renombrado: un corte (o un apagón) a mitad no deja el archivo a medias. Los
+/// guardados van de uno en uno: dos a la vez (la medición de la GPU integrada y el menú de la
+/// bandeja) se pisarían el `.tmp`.
 pub fn save_settings(s: &Settings, path: &Path) -> io::Result<()> {
+    static SAVING: Mutex<()> = Mutex::new(());
+    let text = serde_json::to_string_pretty(s).map_err(io::Error::other)?;
+    let _one_at_a_time = SAVING.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let text = serde_json::to_string_pretty(s).map_err(io::Error::other)?;
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, text)?;
+    let mut f = fs::File::create(&tmp)?;
+    f.write_all(text.as_bytes())?;
+    f.sync_all()?;
+    drop(f);
     fs::rename(&tmp, path)
 }
 

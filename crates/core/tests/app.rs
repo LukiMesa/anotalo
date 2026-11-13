@@ -4,11 +4,12 @@ mod common {
 }
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use anotalo_core::app::{AppEvent, CALL_LABEL, SessionKind, State};
+use anotalo_core::app::{AppEvent, CALL_LABEL, FAST_QUIT_WAIT, SessionKind, State};
+use anotalo_core::config::Settings;
 use anotalo_core::detector::Detected;
 use anotalo_core::model::ModelGate;
 use anotalo_core::routing::{Audio, PLATFORMS};
@@ -593,4 +594,70 @@ fn test_detected_title_reaches_the_session() {
         ..teams()
     });
     assert_eq!(h.session(0).title.as_deref(), Some("Reunión con Acme"));
+}
+
+/// Windows se apaga a la fuerza grabando: `quit_fast` no espera a todo lo que queda por transcribir
+/// (aquí, 30 s), pero el archivo se cierra.
+#[test]
+fn test_quit_fast_does_not_wait_for_the_backlog() {
+    let h = h();
+    *h.stop_delay.lock().unwrap() = Duration::from_secs(30);
+    h.app.toggle();
+    let t0 = Instant::now();
+    h.app.quit_fast();
+    let took = t0.elapsed();
+    assert!(took < FAST_QUIT_WAIT + Duration::from_secs(1), "{took:?}");
+    assert!(h.stopped(0), "el archivo se cerró");
+}
+
+/// También si ya se estaba guardando (se colgó y se apagó el PC enseguida).
+#[test]
+fn test_quit_fast_hurries_a_save_in_progress() {
+    let h = h();
+    *h.stop_delay.lock().unwrap() = Duration::from_secs(30);
+    h.app.toggle();
+    let app = h.app.clone();
+    let stopper = std::thread::spawn(move || app.toggle());
+    std::thread::sleep(Duration::from_millis(100));
+    let t0 = Instant::now();
+    h.app.quit_fast();
+    let took = t0.elapsed();
+    assert!(took < FAST_QUIT_WAIT + Duration::from_secs(1), "{took:?}");
+    assert!(h.stopped(0), "el archivo se cerró");
+    stopper.join().unwrap();
+}
+
+/// Dos ajustes a la vez (la medición de la GPU integrada y el menú de la bandeja): el último
+/// guardado lleva los dos, aunque el primero tarde en escribirse.
+#[test]
+fn test_concurrent_settings_last_save_has_both() {
+    let h = h();
+    let (tx, rx) = mpsc::channel::<()>();
+    let (tx, rx) = (Mutex::new(tx), Mutex::new(rx));
+    let first = AtomicBool::new(true);
+    *h.save_hook.lock().unwrap() = Some(Arc::new(move |_s: &Settings| {
+        if first.swap(false, Ordering::SeqCst) {
+            // el primero espera (como mucho medio segundo) a que el otro guarde antes
+            let _ = rx.lock().unwrap().recv_timeout(Duration::from_millis(500));
+        } else {
+            let _ = tx.lock().unwrap().send(());
+        }
+    }));
+    let app = h.app.clone();
+    let first_save =
+        std::thread::spawn(move || app.apply_setting("copy_on_stop", serde_json::json!(false)));
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        h.app
+            .apply_setting("show_indicator", serde_json::json!(false)),
+        Ok(())
+    );
+    assert_eq!(first_save.join().unwrap(), Ok(()));
+    let last = h.saves.lock().unwrap().last().cloned().unwrap();
+    assert!(
+        !last.copy_on_stop && !last.show_indicator,
+        "el último guardado perdió un ajuste: copy_on_stop={} show_indicator={}",
+        last.copy_on_stop,
+        last.show_indicator
+    );
 }

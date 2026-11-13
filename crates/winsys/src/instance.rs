@@ -26,9 +26,12 @@ impl Drop for InstanceGuard {
 
 /// None si otra instancia ya tiene el mutex.
 pub fn acquire(mutex: &str) -> Option<InstanceGuard> {
+    // el nombre vive hasta después de GetLastError: soltarlo antes (liberar memoria) podría
+    // cambiar el último error
+    let name = HSTRING::from(mutex);
     // SAFETY: nombre válido durante la llamada; el handle se cierra en Drop.
     unsafe {
-        let h = CreateMutexW(None, false, &HSTRING::from(mutex)).ok()?;
+        let h = CreateMutexW(None, false, &name).ok()?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
             let _ = CloseHandle(h);
             return None;
