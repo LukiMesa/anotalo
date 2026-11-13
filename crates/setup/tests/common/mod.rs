@@ -24,8 +24,21 @@ pub const FILE_SHARE_DELETE: u32 = 4;
 
 pub struct Env {
     pub dir: tempfile::TempDir,
+    /// La carpeta temporal con nombres largos (en GitHub Actions, %TEMP% va con nombres cortos
+    /// `RUNNER~1`, y los accesos directos guardan la ruta larga).
+    root: PathBuf,
     pub l: Layout,
     key: String,
+}
+
+/// La ruta con sus nombres largos (sin `RUNNER~1`) y sin el prefijo `\\?\` de `canonicalize`.
+fn long_path(p: &Path) -> PathBuf {
+    let full = fs::canonicalize(p).unwrap();
+    let s = full.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => full.clone(),
+    }
 }
 
 /// COM iniciado en un hilo que vive lo que el proceso de pruebas. `shortcut::create`/`read` inician
@@ -70,12 +83,13 @@ impl Env {
             std::thread::sleep(Duration::from_millis(20));
         }
         let dir = tempfile::tempdir().unwrap();
-        let l = Layout::for_test(dir.path(), &key);
-        Env { dir, l, key }
+        let root = long_path(dir.path());
+        let l = Layout::for_test(&root, &key);
+        Env { dir, root, l, key }
     }
 
     pub fn root(&self) -> &Path {
-        self.dir.path()
+        &self.root
     }
 
     /// El instalador recién descargado: `<root>\dl\Anotalo-Setup-9.9.9.exe`.
