@@ -229,6 +229,8 @@ jobs:
           foreach ($p in "$env:APPDATA\CallTranscriber", "C:\e2e") {
             if (Test-Path $p) { throw "test-setup-e2e.ps1 creó $p antes de negarse" }
           }
+          "Se negó, como debe."
+          exit 0 # si no, el paso acaba con el código del pwsh de dentro (3)
 
       - name: Transcriptor 0.6.4 → Anotalo, actualización con la app abierta y desinstalación
         shell: pwsh
