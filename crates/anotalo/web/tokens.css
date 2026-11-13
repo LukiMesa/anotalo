@@ -1,0 +1,40 @@
+/* Tema Noche de la app. Fuentes locales, sin red. */
+@font-face { font-family: "Sora"; src: url("fonts/Sora.ttf") format("truetype"); font-weight: 100 800; font-display: swap; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/InstrumentSans.ttf") format("truetype"); font-weight: 400 700; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/JetBrainsMono.ttf") format("truetype"); font-weight: 100 800; font-display: swap; }
+
+:root {
+  color-scheme: dark;
+  --surface: #161C2B;
+  --surface-raised: #1F2738;
+  --surface-sunken: #10141F;
+  --line: #2E3850;
+  --line-strong: #5A6883;
+  --ink: #EEF3F7;
+  --ink-muted: #A9B7C6;
+  --orbita: #2EC5E6;
+  --on-orbita: #0B1220;
+  --orbita-soft: #133447;
+  --acero-oscuro: #6B7D92;
+  --exito: #3DDC97;
+  --error: #FF7A7A;
+  --focus-ring: var(--orbita);
+  --shadow-raised: 0 12px 32px rgba(5,8,15,0.45);
+  --shadow-glow: 0 0 0 1px rgba(46,197,230,0.35), 0 8px 28px rgba(46,197,230,0.18);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+  --duration-fast: 150ms;
+  --duration-base: 250ms;
+  --duration-exit: 180ms;
+  --duration-quick: 120ms;
+  --duration-view: 200ms;
+  --rise: 6px;
+  --stagger-step: 35ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.55, 0, 1, 0.45);
+  --font-display: "Sora", "Segoe UI", system-ui, sans-serif;
+  --font-sans: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}

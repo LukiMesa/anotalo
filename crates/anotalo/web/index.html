@@ -4,14 +4,147 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Anotalo</title>
-  <!-- Página provisional: la de verdad (copia de calltx/ui/web) llega en la tarea 7. -->
-  <script src="bridge.js"></script>
-  <style>
-    html, body { margin: 0; height: 100%; background: #10141F; color: #E6E9F2; font-family: "Segoe UI", sans-serif; }
-    .titlebar { app-region: drag; height: 40px; display: flex; align-items: center; padding: 0 16px; user-select: none; }
-  </style>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="app.css">
 </head>
 <body>
-  <header class="titlebar" id="titlebar">Anotalo</header>
+<header class="titlebar" id="titlebar">
+  <div class="tb-brand"><span class="mark" data-icon="mic"></span>Anotalo</div>
+  <div class="tb-mid"><div class="tb-status" aria-live="polite"><span class="dot" id="state-dot"></span><span id="state-text">Cargando…</span><span class="tb-timer" id="state-timer"></span><span class="tb-keys" id="state-keys"></span></div></div>
+  <div class="tb-ctl">
+    <button class="tb-btn" id="tb-min" aria-label="Minimizar" title="Minimizar"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
+    <button class="tb-btn" id="tb-max" aria-label="Maximizar" title="Maximizar"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
+    <button class="tb-btn close" id="tb-close" aria-label="Cerrar" title="Cerrar"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
+  </div>
+</header>
+<div class="app">
+  <aside class="side" aria-label="Navegación">
+    <button class="nav" data-view="recordings" aria-current="page"><span data-icon="list"></span>Grabaciones<span class="count" id="count"></span></button>
+    <div class="group">Ajustes</div>
+    <button class="nav" data-view="hotkey"><span data-icon="keyboard"></span>Atajo y grabación</button>
+    <button class="nav" data-view="calls"><span data-icon="phone"></span>Llamadas</button>
+    <button class="nav" data-view="model"><span data-icon="chip"></span>Modelo e idioma</button>
+    <button class="nav" data-view="general"><span data-icon="gear"></span>General</button>
+    <div class="upd-note" id="upd-note" hidden>
+      <div class="upd-title" id="upd-note-title">Versión nueva disponible</div>
+      <div class="upd-sub" id="upd-note-sub"></div>
+      <button class="btn primary sm" id="upd-note-btn">Actualizar</button>
+    </div>
+  </aside>
+
+  <!-- Grabaciones -->
+  <main class="view on" id="view-recordings">
+    <section class="list" aria-label="Lista de grabaciones">
+      <div class="head">
+        <div class="eyebrow">Historial</div>
+        <div class="head-row"><h1>Grabaciones</h1>
+          <button class="btn primary sm" id="call-btn" title="Graba tu micrófono y todo lo que suena en el equipo"><span data-icon="phone"></span><span id="call-btn-text">Grabar llamada</span></button></div>
+        <label class="search"><span data-icon="search"></span><span class="sr">Buscar</span>
+          <input id="q" type="search" placeholder="Buscar en el texto, título o cliente" autocomplete="off"></label>
+        <div class="seg" role="group" aria-label="Filtrar">
+          <button data-kind="all" aria-pressed="true">Todas</button>
+          <button data-kind="call" aria-pressed="false">Llamadas</button>
+          <button data-kind="note" aria-pressed="false">Notas rápidas</button>
+        </div>
+        <div class="clients" id="clients" role="group" aria-label="Filtrar por cliente" hidden></div>
+      </div>
+      <div class="items" id="items" role="listbox" aria-label="Grabaciones"></div>
+    </section>
+    <section class="detail" id="detail" aria-live="off"></section>
+  </main>
+
+  <!-- Atajo y grabación -->
+  <main class="view" id="view-hotkey"><div class="settings"><div class="wrap">
+    <div class="eyebrow">Ajustes</div><h1>Atajo y grabación</h1>
+    <div class="card"><div class="ch">Atajos</div>
+      <div class="set"><div class="l"><b>Empezar / parar nota rápida</b><span>Funciona desde cualquier app. Si se está grabando una llamada, la detiene.</span><span class="err" id="hotkey-err" role="alert"></span></div>
+        <div class="keyfield" id="keyfield"></div></div>
+      <div class="set"><div class="l"><b>Atajo de marca</b><span>Durante una llamada, deja una marca en ese momento de la transcripción.</span><span class="err" id="hotkey-mark-err" role="alert"></span></div>
+        <div class="keyfield" id="keyfield-mark"></div></div>
+    </div>
+    <div class="card"><div class="ch">Al terminar una nota rápida</div>
+      <div class="set"><div class="l"><b>Copiar al portapapeles</b><span>Solo lo que dijiste, listo para pegar. Las llamadas se guardan sin copiar.</span></div><button class="switch" role="switch" data-setting="copy_on_stop" aria-label="Copiar al portapapeles"></button></div>
+      <div class="set"><div class="l"><b>Mostrar indicador de grabación</b><span>Píldora pequeña abajo en el centro de la pantalla.</span></div><button class="switch" role="switch" data-setting="show_indicator" aria-label="Mostrar indicador"></button></div>
+    </div>
+  </div></div></main>
+
+  <!-- Llamadas -->
+  <main class="view" id="view-calls"><div class="settings"><div class="wrap">
+    <div class="eyebrow">Ajustes</div><h1>Llamadas</h1>
+    <div class="card"><div class="ch">Detección automática</div>
+      <div class="set"><div class="l"><b>Grabar llamadas automáticamente</b><span>Empieza cuando una llamada usa el micrófono y para al colgar.</span></div><button class="switch" role="switch" data-setting="auto_mode" aria-label="Grabar llamadas automáticamente"></button></div>
+      <div class="set"><div class="l"><b>Microsoft Teams</b><span>App de escritorio. Graba lo que suena en la salida que usa Teams (por ejemplo, tus auriculares).</span></div><button class="switch" role="switch" data-setting="detect_teams" aria-label="Detectar Teams"></button></div>
+      <div class="set"><div class="l"><b>Zoom</b><span>App de escritorio.</span></div><button class="switch" role="switch" data-setting="detect_zoom" aria-label="Detectar Zoom"></button></div>
+      <div class="set"><div class="l"><b>WhatsApp</b><span>Cuenta como llamada tras 30 s seguidos de micrófono, para no grabar notas de voz cortas (los primeros 30 s no se transcriben).</span></div><button class="switch" role="switch" data-setting="detect_whatsapp" aria-label="Detectar WhatsApp"></button></div>
+      <div class="set"><div class="l"><b>Slack</b><span>Huddles y llamadas.</span></div><button class="switch" role="switch" data-setting="detect_slack" aria-label="Detectar Slack"></button></div>
+      <div class="set"><div class="l"><b>Discord</b><span>Desactivado por defecto: también se usa fuera de llamadas de trabajo.</span></div><button class="switch" role="switch" data-setting="detect_discord" aria-label="Detectar Discord"></button></div>
+      <div class="set"><div class="l"><b>Llamadas en el navegador</b><span>Firefox, Chrome, Brave, Edge, Opera y Vivaldi: cualquier web que use el micrófono (Meet, Teams, Zoom, WhatsApp Web…).</span></div><button class="switch" role="switch" data-setting="detect_browsers" aria-label="Detectar llamadas en el navegador"></button></div>
+    </div>
+    <div class="card"><div class="ch">Etiquetas</div>
+      <div class="set"><div class="l"><b>Tu voz</b><span>Micrófono.</span><span class="err" data-err="label_me"></span></div><input class="text" data-text="label_me" aria-label="Etiqueta de tu voz"></div>
+      <div class="set"><div class="l"><b>Los demás</b><span>Audio de la llamada.</span><span class="err" data-err="label_others"></span></div><input class="text" data-text="label_others" aria-label="Etiqueta de los demás"></div>
+    </div>
+    <div class="card"><div class="ch">Voces guardadas</div>
+      <p class="cnote">Cuando le pones nombre a una persona en una llamada, su voz se guarda solo en este equipo y las siguientes llamadas la reconocen.</p>
+      <div id="voices"></div>
+    </div>
+  </div></div></main>
+
+  <!-- Modelo -->
+  <main class="view" id="view-model"><div class="settings"><div class="wrap">
+    <div class="eyebrow">Ajustes</div><h1>Modelo e idioma</h1>
+    <div class="card"><div class="ch">Transcripción local</div>
+      <div class="set"><div class="l"><b>Modelo</b><span>Más grande = más preciso y más lento.</span><span class="err" data-err="model"></span></div>
+        <select class="select" data-select="model" aria-label="Modelo">
+          <option value="large-v3-turbo">large-v3-turbo (recomendado)</option>
+          <option value="large-v3">large-v3</option>
+          <option value="medium">medium</option>
+          <option value="small">small</option>
+        </select></div>
+      <div class="set"><div class="l"><b>Idioma de las llamadas</b><span class="err" data-err="language"></span></div>
+        <select class="select" data-select="language" aria-label="Idioma">
+          <option value="es">Español</option>
+          <option value="en">Inglés</option>
+        </select></div>
+      <div class="set"><div class="l"><b>Liberar memoria tras</b><span>Sin grabar durante este tiempo, el modelo sale de la memoria. Al volver a grabar tarda unos segundos en cargar.</span><span class="err" data-err="release_after_min"></span></div>
+        <select class="select" data-select="release_after_min" aria-label="Liberar memoria tras">
+          <option value="0">Nunca</option>
+          <option value="2">2 min</option>
+          <option value="10">10 min</option>
+          <option value="30">30 min</option>
+        </select></div>
+      <div class="set"><div class="l"><b>Procesador</b><span id="device">—</span></div></div>
+    </div>
+  </div></div></main>
+
+  <!-- General -->
+  <main class="view" id="view-general"><div class="settings"><div class="wrap">
+    <div class="eyebrow">Ajustes</div><h1>General</h1>
+    <div class="card"><div class="ch">Inicio</div>
+      <div class="set"><div class="l"><b>Iniciar con Windows</b><span>Arranca minimizado junto al reloj.</span><span class="err" data-err="autostart"></span></div><button class="switch" role="switch" data-setting="autostart" aria-label="Iniciar con Windows"></button></div>
+    </div>
+    <div class="card"><div class="ch">Grabaciones</div>
+      <div class="set"><div class="l"><b>Carpeta</b><span class="path" id="folder"></span><span class="err" data-err="output_dir"></span></div>
+        <button class="btn" id="open-folder">Abrir</button><button class="btn" id="choose-folder">Cambiar…</button></div>
+    </div>
+    <div class="card"><div class="ch">Actualizaciones</div>
+      <div class="set"><div class="l"><b>Versión de la app</b><span id="upd-text">Solo en la versión instalada</span><span class="err" data-err="update"></span></div>
+        <button class="btn" id="upd-check">Buscar actualizaciones</button><button class="btn primary" id="upd-install" hidden>Actualizar</button></div>
+    </div>
+    <div class="card"><div class="ch">Acerca de</div>
+      <div class="set"><div class="l"><b>Anotalo</b><span id="version"></span></div></div>
+    </div>
+    <div class="diag">
+      <button class="link" id="copy-diag"><span data-icon="copy"></span>Copiar diagnóstico</button>
+      <span>Versión, ajustes, audio y registro, para enviarlo si algo falla. Sin transcripciones.</span>
+    </div>
+  </div></div></main>
+</div>
+
+<dialog class="dlg" id="dlg" aria-labelledby="dlg-title"></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="bridge.js"></script>
+<script src="icons.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
