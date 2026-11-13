@@ -77,6 +77,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "anotalo-setup"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "anotalo-core",
+ "anotalo-winsys",
+ "chrono",
+ "log",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "windows",
+]
+
+[[package]]
 name = "anotalo-whisper"
 version = "1.0.0-alpha.1"
 dependencies = [
