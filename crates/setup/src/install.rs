@@ -146,11 +146,28 @@ struct Running {
     legacy: bool,
 }
 
+/// Cierra Anotalo y Transcriptor (ver `close_app`). Los `Transcriptor.exe` se terminan sin más
+/// (Python 0.6.x no tiene señal de salida; Inno hacía `taskkill /F`).
+fn close_running(l: &Layout, sys: &dyn System) -> Running {
+    let app = close_app(l, sys);
+    let legacy = sys.processes_named(LEGACY_EXE);
+    if !legacy.is_empty() {
+        log::info!("Cierro Transcriptor ({legacy:?})");
+        sys.terminate(&legacy);
+        if !sys.wait_gone(&legacy, LEGACY_QUIT_WAIT) {
+            log::warn!("Transcriptor no terminó a tiempo");
+        }
+    }
+    Running {
+        app,
+        legacy: !legacy.is_empty(),
+    }
+}
+
 /// Pide a Anotalo que se cierre (guarda la grabación en curso) y, solo si no lo hace a tiempo,
 /// termina lo que corre desde su carpeta. Los `Anotalo.exe mcp` no tienen el mutex: si la app se
-/// cierra bien, siguen en marcha. Los `Transcriptor.exe` se terminan sin más (Python 0.6.x no tiene
-/// señal de salida; Inno hacía `taskkill /F`).
-fn close_running(l: &Layout, sys: &dyn System) -> Running {
+/// cierra bien, siguen en marcha. Devuelve si la app estaba abierta.
+pub(crate) fn close_app(l: &Layout, sys: &dyn System) -> bool {
     let app = sys.app_running();
     if app {
         log::info!("Pido a Anotalo que se cierre");
@@ -164,18 +181,7 @@ fn close_running(l: &Layout, sys: &dyn System) -> Running {
             }
         }
     }
-    let legacy = sys.processes_named(LEGACY_EXE);
-    if !legacy.is_empty() {
-        log::info!("Cierro Transcriptor ({legacy:?})");
-        sys.terminate(&legacy);
-        if !sys.wait_gone(&legacy, LEGACY_QUIT_WAIT) {
-            log::warn!("Transcriptor no terminó a tiempo");
-        }
-    }
-    Running {
-        app,
-        legacy: !legacy.is_empty(),
-    }
+    app
 }
 
 /// Copia el exe y `vcomp140.dll` byte a byte (nunca `CopyFile`: el exe descargado lleva la marca de

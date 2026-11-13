@@ -114,12 +114,23 @@ fn remove_tree(l: &Layout, dir: &Path) -> Result<(), String> {
 
 /// `dir` es o contiene una de las carpetas de grabaciones configuradas.
 pub(crate) fn holds_recordings(l: &Layout, dir: &Path) -> bool {
-    let low = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
-    let dir = low(dir);
+    contains_any(dir, &recordings_dirs(l))
+}
+
+/// Las carpetas de grabaciones configuradas: la de Anotalo y la de la app de Python (solo se leen
+/// sus `config.json`; sin ellos, la de por defecto).
+pub(crate) fn recordings_dirs(l: &Layout) -> Vec<PathBuf> {
     [l.data_dir(), l.legacy_data_dir()]
         .iter()
         .map(|d| read_output_dir(&d.join("config.json"), Profile::Installed))
-        .any(|rec| low(&rec).starts_with(&dir))
+        .collect()
+}
+
+/// `dir` es o contiene alguna de `recordings` (sin distinguir mayúsculas).
+pub(crate) fn contains_any(dir: &Path, recordings: &[PathBuf]) -> bool {
+    let low = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
+    let dir = low(dir);
+    recordings.iter().any(|rec| low(rec).starts_with(&dir))
 }
 
 /// Si Transcriptor arrancaba con Windows: su acceso directo de inicio; si no está, el `autostart`
@@ -161,7 +172,7 @@ pub(crate) fn remove_file(p: &Path) -> Result<(), String> {
     }
 }
 
-fn remove_dir_all(p: &Path) -> Result<(), String> {
+pub(crate) fn remove_dir_all(p: &Path) -> Result<(), String> {
     match fs::remove_dir_all(p) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => {
             Err(format!("no se pudo borrar {} ({e})", p.display()))

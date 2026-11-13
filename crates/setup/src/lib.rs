@@ -8,3 +8,4 @@ pub mod install;
 pub mod layout;
 pub mod legacy;
 pub mod system;
+pub mod uninstall;

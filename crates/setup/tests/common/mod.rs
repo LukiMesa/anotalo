@@ -60,6 +60,15 @@ impl Env {
         static N: AtomicU32 = AtomicU32::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
         let key = format!(r"Software\AnotaloTest\{}-{n}", std::process::id());
+        // La clave propia se crea ya: mientras exista, nadie puede borrar `AnotaloTest` (cada
+        // prueba que termina intenta borrarla si está vacía). Si justo la está borrando otra
+        // prueba (de este proceso o de otro), crear debajo falla un momento: se reintenta.
+        let mut tries = 0;
+        while let Err(e) = registry::set_values(&key, &[]) {
+            tries += 1;
+            assert!(tries < 50, "{e}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
         let dir = tempfile::tempdir().unwrap();
         let l = Layout::for_test(dir.path(), &key);
         Env { dir, l, key }
