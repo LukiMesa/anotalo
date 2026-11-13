@@ -651,6 +651,27 @@ fn test_first_run_after_update_notifies_once() {
     assert_eq!(s.last_run_version, "0.6.1");
 }
 
+/// Quien viene de Transcriptor (la app de Python, versiones 0.x) trae su `last_run_version` en los
+/// ajustes copiados: pasar a Anotalo no es "Anotalo actualizado".
+#[test]
+fn test_coming_from_transcriptor_is_not_an_update() {
+    let mut s = Settings::defaults(Profile::Installed);
+    s.last_run_version = "0.6.4".into();
+    let notes = Notes::default();
+    assert!(announce_if_updated(&mut s, "1.0.0-alpha.3", &notes));
+    assert!(notes.0.lock().unwrap().is_empty(), "sin aviso");
+    assert_eq!(s.last_run_version, "1.0.0-alpha.3", "se apunta la versión");
+    // la siguiente actualización de Anotalo sí se avisa
+    assert!(announce_if_updated(&mut s, "1.0.0", &notes));
+    assert_eq!(
+        *notes.0.lock().unwrap(),
+        [(
+            "Anotalo actualizado".to_string(),
+            "Ya tienes la versión 1.0.0".to_string()
+        )]
+    );
+}
+
 /// Primero se bloquean las grabaciones y luego se mira si hay una: así ninguna puede empezar entre
 /// la última comprobación y el instalador. Si la hay, se deshace y se espera.
 #[test]

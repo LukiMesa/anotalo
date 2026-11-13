@@ -786,13 +786,13 @@ fn snapshot_of(d: &Data, current: &str) -> Value {
 }
 
 /// Tras actualizar, avisa una vez de la versión nueva. Devuelve true si cambió `s` (hay que
-/// guardar). La primera vez solo se apunta la versión.
+/// guardar). La primera vez solo se apunta la versión; también al llegar desde Transcriptor.
 pub fn announce_if_updated(s: &mut Settings, version: &str, n: &dyn Notifier) -> bool {
     if s.last_run_version == version {
         return false;
     }
     let prev = std::mem::replace(&mut s.last_run_version, version.to_string());
-    if !prev.is_empty() {
+    if !prev.is_empty() && !from_transcriptor(&prev, version) {
         n.notify(
             "Anotalo actualizado",
             &format!("Ya tienes la versión {version}"),
@@ -800,4 +800,13 @@ pub fn announce_if_updated(s: &mut Settings, version: &str, n: &dyn Notifier) ->
         );
     }
     true
+}
+
+/// De una versión 0.x a una 1.x o posterior: las 0.x son de Transcriptor (la app de Python), cuyos
+/// ajustes se copian con su `last_run_version`. Pasar a Anotalo no es "Anotalo actualizado".
+fn from_transcriptor(prev: &str, version: &str) -> bool {
+    matches!(
+        (Version::parse(prev), Version::parse(version)),
+        (Some(p), Some(v)) if p.major == 0 && v.major >= 1
+    )
 }
