@@ -506,3 +506,95 @@ fn test_voices_lists_the_segments_with_lines() {
     w.add_voiced("Otros", 12.0, "  ", Some(13.0), Some(8)); // sin texto: no hay línea
     assert_eq!(w.voices(), std::collections::HashSet::from([3, 4, 7]));
 }
+
+// --- eco de los altavoces ------------------------------------------------------------------
+
+/// Sin auriculares, lo que dicen los demás vuelve a salir como tuyo: al cerrar se quita.
+#[test]
+fn test_close_drops_my_lines_that_repeat_the_others() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = make(&d, "Meet");
+    w.drop_echo_in("Yo");
+    w.add(
+        "Otros",
+        10.0,
+        "Necesitamos una tienda virtual para vender los productos.",
+        Some(14.0),
+    );
+    w.add(
+        "Yo",
+        10.3,
+        "Necesitamos una tienda virtual para vender los productos",
+        Some(14.2),
+    );
+    w.add(
+        "Yo",
+        20.0,
+        "Me parece bien, yo me encargo de la página.",
+        Some(23.0),
+    );
+    let text = read(&w.close(end()).unwrap());
+    assert!(!text.contains("Yo:** Necesitamos"), "{text}");
+    assert!(text.contains("**[00:00:10] Otros:** Necesitamos"), "{text}");
+    assert!(text.contains("**[00:00:20] Yo:** Me parece bien"), "{text}");
+    assert_eq!(
+        w.plain_texts(),
+        vec![
+            "Necesitamos una tienda virtual para vender los productos.",
+            "Me parece bien, yo me encargo de la página."
+        ]
+    );
+}
+
+#[test]
+fn test_close_keeps_my_reply_glued_to_the_echo() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = make(&d, "Meet");
+    w.drop_echo_in("Yo");
+    w.add(
+        "Otros",
+        99.0,
+        "esos treinta para que te queden solo veinte a la venta, ¿cierto?",
+        Some(104.0),
+    );
+    w.add(
+        "Yo",
+        100.0,
+        "para que te queden solo veinte a la venta, ¿cierto? Sí, así en vez de manejar una hoja de cálculo lo llevas desde la página.",
+        Some(112.0),
+    );
+    w.add("Otros", 113.0, "Perfecto.", Some(114.0));
+    let text = read(&w.close(end()).unwrap());
+    assert!(
+        text.contains("**[00:01:44] Yo:** Sí, así en vez de manejar una hoja de cálculo lo llevas desde la página.\n"),
+        "{text}"
+    );
+    assert!(!text.contains("Yo:** para que te queden"), "{text}");
+    let (o1, me, o2) = (
+        text.find("Otros:** esos").unwrap(),
+        text.find("Yo:** Sí").unwrap(),
+        text.find("Otros:** Perfecto").unwrap(),
+    );
+    assert!(o1 < me && me < o2, "{text}");
+}
+
+/// Sin `drop_echo_in` (notas, el formato de la app de Python) nada cambia.
+#[test]
+fn test_without_echo_filter_repeats_stay() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, _) = make(&d, "Meet");
+    w.add(
+        "Otros",
+        10.0,
+        "Necesitamos una tienda virtual para vender los productos.",
+        Some(14.0),
+    );
+    w.add(
+        "Yo",
+        10.3,
+        "Necesitamos una tienda virtual para vender los productos",
+        Some(14.2),
+    );
+    let text = read(&w.close(end()).unwrap());
+    assert!(text.contains("Yo:** Necesitamos"), "{text}");
+}

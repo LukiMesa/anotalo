@@ -14,6 +14,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::engine::Transcriber;
+use crate::gate::{Line, StartGate};
 use crate::segmenter::{Segment, Segmenter, SegmenterConfig, VadFn};
 use crate::source::{AudioSource, OnAudio, now_s};
 use crate::speaker::diarizer::Diarizer;
@@ -260,6 +261,8 @@ pub struct CallSession {
     ticker: Option<JoinHandle<()>>,
     /// Las voces de "Otros" y dónde guardarlas, si se separan.
     diarizer: Option<(Arc<Mutex<Diarizer>>, PathBuf)>,
+    /// En una llamada, lo tuyo espera a que hable otra persona.
+    gate: Option<Arc<Mutex<StartGate>>>,
 }
 
 impl CallSession {
@@ -295,16 +298,46 @@ impl CallSession {
             stop_changed: Condvar::new(),
             others_factory: others_factory.map(Mutex::new),
         });
-        let on_result: OnResult =
+        // En una llamada: lo tuyo espera a que hable otra persona y, al colgar, se quita de tus
+        // líneas el eco de los altavoces. Una nota es solo tuya.
+        let gate = others
+            .is_some()
+            .then(|| Arc::new(Mutex::new(StartGate::new())));
+        if others.is_some() {
+            writer.drop_echo_in(&cfg.label_me);
+        }
+        let write: Arc<dyn Fn(Line) + Send + Sync> = Arc::new(move |l: Line| {
+            if writer
+                .add_voiced(&l.speaker, l.start_s, &l.text, Some(l.end_s), l.voice)
+                .is_some()
+            {
+                notify_line(on_line.as_ref(), &l.speaker, l.start_s, &l.text);
+            }
+        });
+        // lo que sale del transcriptor en el carril del micrófono (`mine`) o en el de los demás
+        let lane_result = |mine: bool| -> OnResult {
+            let (write, gate) = (write.clone(), gate.clone());
             Arc::new(move |seg: Segment, text: String, voice: Option<u32>| {
-                if writer
-                    .add_voiced(&seg.speaker, seg.start_s, &text, Some(seg.end_s), voice)
-                    .is_none()
-                {
+                if text.trim().is_empty() {
                     return;
                 }
-                notify_line(on_line.as_ref(), &seg.speaker, seg.start_s, &text);
-            });
+                let line = Line {
+                    speaker: seg.speaker,
+                    start_s: seg.start_s,
+                    end_s: seg.end_s,
+                    text,
+                    voice,
+                };
+                let out = match &gate {
+                    Some(g) => {
+                        let mut g = g.lock().unwrap_or_else(|e| e.into_inner());
+                        if mine { g.mine(line) } else { g.other(line) }
+                    }
+                    None => vec![line],
+                };
+                out.into_iter().for_each(|l| write(l));
+            })
+        };
 
         let diar: Option<Diar> = match (&cfg.speakers, &others) {
             (Some(sp), Some(_)) => Some((
@@ -324,7 +357,7 @@ impl CallSession {
         sources.extend(others.map(|o| (o, cfg.label_others.clone(), diar)));
         let mut level = on_level.map(|l| Arc::new(Mutex::new(l)));
         let mut workers = Vec::new();
-        for (source, label, lane_diar) in sources {
+        for (i, (source, label, lane_diar)) in sources.into_iter().enumerate() {
             let seg_cfg = SegmenterConfig {
                 silence_ms: cfg.silence_ms,
                 max_segment_s: cfg.max_segment_s,
@@ -333,7 +366,7 @@ impl CallSession {
             };
             let segmenter = Segmenter::new(&label, seg_cfg, vad_factory());
             let (tx, rx) = mpsc::channel();
-            let (asr, cb) = (transcriber.clone(), on_result.clone());
+            let (asr, cb) = (transcriber.clone(), lane_result(i == 0));
             workers.push(
                 std::thread::Builder::new()
                     .name(format!("carril {label}"))
@@ -362,6 +395,7 @@ impl CallSession {
             workers,
             ticker: Some(ticker),
             diarizer,
+            gate,
         })
     }
 
@@ -420,6 +454,18 @@ impl CallSession {
             // lo que quede ya no llegaría al archivo (se cierra ahora): no se gasta más tiempo en ello
             let dropped = self.transcriber.cancel_pending();
             log::warn!("Se cierra la transcripción con {dropped} frases sin transcribir");
+        }
+        // si no habló nadie más, lo tuyo que esperaba se guarda (quizá falló el audio de los demás)
+        if let Some(g) = &self.gate {
+            for l in g.lock().unwrap_or_else(|e| e.into_inner()).finish() {
+                self.shared.writer.add_voiced(
+                    &l.speaker,
+                    l.start_s,
+                    &l.text,
+                    Some(l.end_s),
+                    l.voice,
+                );
+            }
         }
         // la llamada entera: etiquetas finales de cada persona y sus huellas
         let voices = self.diarizer.as_ref().map(|(d, dir)| {

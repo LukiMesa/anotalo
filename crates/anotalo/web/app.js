@@ -66,11 +66,15 @@ const checked = (text) => `<span class="ok">${icon("check")}</span>${text}`;
 // --- diálogo ------------------------------------------------------------
 // Pide un nombre (si hay `value`) o una confirmación. `onOk` hace el cambio y devuelve el error, si
 // lo hay: el diálogo sigue abierto y lo muestra. Resuelve con el texto (o true), o null si se cancela.
-function ask({ title, body = "", value = null, okText = "Guardar", danger = false, onOk = async () => null }) {
+// `choices` ({label, names}): valores que se eligen con un clic (rellenan el campo y guardan).
+function ask({ title, body = "", value = null, choices = null, okText = "Guardar", danger = false, onOk = async () => null }) {
   const dlg = $("#dlg");
+  const picks = value !== null && choices?.names.length
+    ? `<div class="dlg-same" role="group" aria-label="${esc(choices.label)}"><span aria-hidden="true">${esc(choices.label)}:</span>${choices.names.map((n) => `<button type="button" class="cf" data-name="${esc(n)}">${esc(n)}</button>`).join("")}</div>`
+    : "";
   dlg.innerHTML = `<form method="dialog">
     <h3 id="dlg-title">${esc(title)}</h3>${body ? `<p>${body}</p>` : ""}
-    ${value === null ? "" : `<input class="text" id="dlg-input" autocomplete="off" spellcheck="false" maxlength="80" aria-labelledby="dlg-title">`}
+    ${value === null ? "" : `<input class="text" id="dlg-input" autocomplete="off" spellcheck="false" maxlength="80" aria-labelledby="dlg-title">`}${picks}
     <span class="err" id="dlg-err" role="alert"></span>
     <div class="dlg-actions"><button class="btn" type="button" id="dlg-cancel">Cancelar</button>
       <button class="btn ${danger ? "destroy" : "primary"}" type="submit" id="dlg-ok">${esc(okText)}</button></div>
@@ -81,6 +85,7 @@ function ask({ title, body = "", value = null, okText = "Guardar", danger = fals
     let busy = false;
     const close = (v) => { dlg.close(); resolve(v); };
     $("#dlg-cancel", dlg).onclick = () => close(null);
+    $$(".dlg-same button", dlg).forEach((b) => b.addEventListener("click", () => { input.value = b.dataset.name; $("form", dlg).requestSubmit(); }));
     dlg.oncancel = (e) => { e.preventDefault(); if (!busy) close(null); };  // Esc
     $("form", dlg).onsubmit = async (e) => {
       e.preventDefault();
@@ -280,10 +285,13 @@ function personHtml(name, live) {
 }
 async function renamePerson(id, from) {
   let res = null;
+  // elegir a otra persona de la llamada las junta: la separación de voces la partió en dos
+  const others = $$(".person[data-name]").map((b) => b.dataset.name).filter((n) => n !== from);
   const to = await ask({
     title: "Nombre de la persona",
     body: `Cambia «${esc(from)}» en toda esta llamada. Si guardé su voz, la reconoceré en las próximas llamadas.`,
     value: from,
+    choices: { label: "Es la misma persona que", names: others },
     onOk: async (v) => {
       res = null;
       if (v === from) return null;
@@ -292,7 +300,8 @@ async function renamePerson(id, from) {
     },
   });
   if (!to || !res?.ok) return;
-  toast(checked(`«${esc(from)}» ahora es «${esc(to)}».${res.remembered ? " Recordaré su voz." : ""}`), 5000);
+  const done = others.includes(to) ? `Junté a «${esc(from)}» con «${esc(to)}».` : `«${esc(from)}» ahora es «${esc(to)}».`;
+  toast(checked(`${done}${res.remembered ? " Recordaré su voz." : ""}`), 5000);
   if (res.remembered) loadVoices();
   await select(id, true);
   // el botón que se pulsó ya no existe: el foco pasa a la persona con su nombre nuevo

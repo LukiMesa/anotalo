@@ -554,3 +554,86 @@ fn test_embed_panic_keeps_the_others_lane() {
     );
     assert!(t.contains("- Duración:"), "{t}");
 }
+
+/// Antes de que entre nadie a la llamada, lo que dices no se guarda (salvo los últimos 30 s).
+#[test]
+fn test_my_lines_long_before_anyone_else_are_dropped() {
+    let d = tempfile::tempdir().unwrap();
+    let sess = start(
+        d.path(),
+        FakeSource::new(&[1.5, 45.5]),
+        Some(FakeSource::new(&[50.5])),
+        None,
+        None,
+        None,
+    );
+    let text = read(&sess.stop().unwrap());
+    assert!(!text.contains("**[00:00:01] Yo:**"), "{text}");
+    assert!(text.contains("**[00:00:45] Yo:** texto"), "{text}");
+    assert!(text.contains("**[00:00:50] Otros:** texto"), "{text}");
+}
+
+/// Si nadie más habla (quizá falló su audio), lo tuyo se guarda igual.
+#[test]
+fn test_my_lines_stay_when_nobody_else_speaks() {
+    let d = tempfile::tempdir().unwrap();
+    let lines = Arc::new(AtomicUsize::new(0));
+    let seen = lines.clone();
+    let on_line: OnLine = Box::new(move |_, _, _, _| {
+        seen.fetch_add(1, Ordering::SeqCst);
+    });
+    let sess = start(
+        d.path(),
+        FakeSource::new(&[1.5]),
+        Some(FakeSource::new(&[])),
+        None,
+        Some(on_line),
+        None,
+    );
+    std::thread::sleep(Duration::from_millis(1500));
+    // mientras tanto no se ve: podría ser la sala de espera
+    assert_eq!(lines.load(Ordering::SeqCst), 0);
+    let (path, plain) = sess.stop_with_text(&Hurry::default()).unwrap();
+    assert!(read(&path).contains("**[00:00:01] Yo:** texto"));
+    assert_eq!(plain, "texto");
+}
+
+/// Transcribe cualquier frase como la misma frase larga: lo que oye el micrófono repite a los demás.
+struct PhraseAsr;
+
+impl Asr for PhraseAsr {
+    fn transcribe(&mut self, _pcm: &[f32]) -> Result<Vec<Text>, String> {
+        Ok(vec![Text {
+            text: " Necesitamos una tienda virtual para vender los productos.".into(),
+            avg_logprob: -0.2,
+            no_speech_prob: 0.05,
+        }])
+    }
+}
+
+/// Sin auriculares lo que dicen los demás sale también como tuyo: al colgar se quita.
+#[test]
+fn test_echo_of_the_others_is_dropped_at_close() {
+    let d = tempfile::tempdir().unwrap();
+    let factory = Box::new(|_| Ok(Box::new(PhraseAsr) as Box<dyn Asr>));
+    let asr = Arc::new(Transcriber::start(Placement::Cpu, factory, Box::new(|_| {})).unwrap());
+    let sess = CallSession::start(
+        cfg(d.path(), "Meet"),
+        asr,
+        Box::new(FakeSource::new(&[3.5])),
+        Some(Box::new(FakeSource::new(&[3.5]))),
+        None,
+        None,
+        None,
+        fake_vad(),
+    )
+    .unwrap();
+    let (path, plain) = sess.stop_with_text(&Hurry::default()).unwrap();
+    let text = read(&path);
+    assert!(text.contains("**[00:00:03] Otros:** Necesitamos"), "{text}");
+    assert!(!text.contains("Yo:**"), "{text}");
+    assert_eq!(
+        plain,
+        "Necesitamos una tienda virtual para vender los productos."
+    );
+}

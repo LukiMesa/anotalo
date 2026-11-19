@@ -13,6 +13,8 @@ use std::sync::Mutex;
 
 use chrono::NaiveDateTime;
 
+use crate::echo_lines::{Echo, Said, echo_in};
+
 pub const HOLD_S: f64 = 3.0;
 pub const MERGE_GAP_S: f64 = 2.0;
 
@@ -172,7 +174,7 @@ fn split(r: &Row, labels: &[&str]) -> Vec<Row> {
 /// alguna, una línea unida en vivo que resulta ser de varias personas se parte (una línea por
 /// tramo seguido de la misma persona) y las líneas seguidas de la misma persona (sin nada entre
 /// ellas y a menos de `MERGE_GAP_S`) se unen, como en vivo.
-fn relabeled(rows: &[Row], labels: &HashMap<u32, String>) -> Option<Vec<String>> {
+fn relabeled(rows: &[Row], labels: &HashMap<u32, String>) -> Option<Vec<Row>> {
     let finals: Vec<Option<Vec<&str>>> = rows.iter().map(|r| final_labels(r, labels)).collect();
     if finals.iter().all(Option::is_none) {
         return None;
@@ -204,7 +206,67 @@ fn relabeled(rows: &[Row], labels: &HashMap<u32, String>) -> Option<Vec<String>>
             }
         }
     }
-    Some(out.into_iter().map(|r| r.line).collect())
+    Some(out)
+}
+
+/// Quita de las líneas de `me` lo que repite a los demás a la vez (el eco de los altavoces): las
+/// que son todo eco salen y de las otras queda lo tuyo. Devuelve (quitadas, recortadas).
+fn drop_echo(rows: &mut Vec<Row>, me: &str) -> (usize, usize) {
+    let decisions: Vec<(usize, Echo)> = {
+        let others: Vec<Said> = rows
+            .iter()
+            .filter(|r| !r.mark && r.speaker != me)
+            .map(|r| Said {
+                start_s: r.start_s,
+                end_s: r.end_s,
+                text: &r.text,
+            })
+            .collect();
+        rows.iter()
+            .enumerate()
+            .filter(|(_, r)| !r.mark && r.speaker == me)
+            .map(|(i, r)| {
+                let mine = Said {
+                    start_s: r.start_s,
+                    end_s: r.end_s,
+                    text: &r.text,
+                };
+                (i, echo_in(&mine, &others))
+            })
+            .filter(|(_, e)| *e != Echo::No)
+            .collect()
+    };
+    let (mut dropped, mut trimmed) = (vec![false; rows.len()], 0);
+    for (i, e) in decisions {
+        match e {
+            Echo::All => dropped[i] = true,
+            Echo::Part { start_s, text } => {
+                let r = &mut rows[i];
+                r.start_s = start_s;
+                r.parts = vec![Part {
+                    voice: None,
+                    start_s,
+                    end_s: r.end_s,
+                    text: text.clone(),
+                }];
+                r.text = text;
+                r.render();
+                trimmed += 1;
+            }
+            Echo::No => {}
+        }
+    }
+    let n = dropped.iter().filter(|d| **d).count();
+    let mut i = 0;
+    rows.retain(|_| {
+        i += 1;
+        !dropped[i - 1]
+    });
+    if trimmed > 0 {
+        // lo que queda de una línea recortada empieza más tarde: el orden sigue siendo por la hora
+        rows.sort_by(|a, b| a.start_s.total_cmp(&b.start_s));
+    }
+    (n, trimmed)
 }
 
 struct State {
@@ -214,6 +276,8 @@ struct State {
     written_texts: Vec<String>,
     /// Etiquetas finales de las voces, para `close`.
     labels: Option<HashMap<u32, String>>,
+    /// Quién eres (`label_me`), si al cerrar se quita el eco de tus líneas.
+    me: Option<String>,
     closed: bool,
 }
 
@@ -252,6 +316,7 @@ impl TranscriptWriter {
                 written: Vec::new(),
                 written_texts: Vec::new(),
                 labels: None,
+                me: None,
                 closed: false,
             }),
         };
@@ -423,6 +488,12 @@ impl TranscriptWriter {
         self.state.lock().unwrap().labels = Some(labels);
     }
 
+    /// Al cerrar, quita de las líneas de `me` lo que repite a los demás a la vez: sin auriculares,
+    /// el micrófono oye lo que suena por los altavoces. Solo en llamadas.
+    pub fn drop_echo_in(&self, me: &str) {
+        self.state.lock().unwrap().me = Some(me.to_string());
+    }
+
     /// Escribe lo pendiente y reescribe el archivo con la cabecera final (fin y duración).
     pub fn close(&self, ended_at: NaiveDateTime) -> io::Result<PathBuf> {
         let mut st = self.state.lock().unwrap();
@@ -433,14 +504,28 @@ impl TranscriptWriter {
         let items: Vec<Pending> = std::mem::take(&mut st.pending);
         let _ = emit(&mut st, &items);
         st.file = None; // cerrar antes de reemplazarlo
-        let lines: Vec<String> = match st.labels.as_ref().and_then(|l| relabeled(&st.written, l)) {
-            Some(lines) => lines,
-            None => in_final_order(&st.written)
+        if let Some(me) = st.me.clone() {
+            let (dropped, trimmed) = drop_echo(&mut st.written, &me);
+            if dropped + trimmed > 0 {
+                log::info!(
+                    "Eco de los altavoces: {dropped} líneas quitadas y {trimmed} recortadas"
+                );
+            }
+        }
+        let rows: Vec<Row> = match st.labels.as_ref().and_then(|l| relabeled(&st.written, l)) {
+            Some(rows) => rows,
+            None => final_order(&st.written)
                 .into_iter()
-                .map(str::to_string)
+                .map(|i| st.written[i].clone())
                 .collect(),
         };
-        let body: String = lines.iter().map(|r| format!("{r}\n\n")).collect();
+        // lo dicho (para copiarlo al colgar), ya con las etiquetas finales y sin el eco
+        st.written_texts = rows
+            .iter()
+            .filter(|r| !r.mark)
+            .map(|r| r.text.clone())
+            .collect();
+        let body: String = rows.iter().map(|r| format!("{}\n\n", r.line)).collect();
         let tmp = self.path.with_extension("tmp");
         let mut f = File::create(&tmp)?;
         write_synced(&mut f, &(self.header(Some(ended_at)) + &body))?;

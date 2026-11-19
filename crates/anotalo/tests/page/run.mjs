@@ -151,6 +151,20 @@ await check("renombrar: un nombre no válido se queda en el diálogo; Esc cancel
   if ((await text("#toast")).includes("Recordaré")) throw new Error("una etiqueta no debe decir «Recordaré su voz»");
 });
 
+await check("juntar: el diálogo ofrece a las otras personas de la llamada y juntarlas llama a rename_person", async () => {
+  await until(async () => JSON.stringify(await texts(".person[data-name]")) === JSON.stringify(["María", "Persona 3"]), "personas antes de juntar");
+  await page.click('.person[data-name="Persona 3"]');
+  await until(() => page.$eval("#dlg", (d) => d.open), "diálogo abierto");
+  eq(await texts("#dlg .dlg-same button"), ["María"], "solo las otras personas");
+  eq(await page.getAttribute("#dlg .dlg-same", "aria-label"), "Es la misma persona que", "grupo con nombre");
+  await shot("03c-merge-dialog");
+  await page.click('#dlg .dlg-same button[data-name="María"]');
+  await until(async () => !(await page.$eval("#dlg", (d) => d.open)), "diálogo cerrado");
+  eq((await calls("rename_person")).at(-1), [ACME, "Persona 3", "María"], "llamada a rename_person");
+  await until(async () => (await text("#toast")).includes("Junté a «Persona 3» con «María»"), "aviso de juntar");
+  await until(async () => JSON.stringify(await texts(".person[data-name]")) === JSON.stringify(["María"]), "una sola persona");
+});
+
 await check("filtro por cliente: chips de los clientes y la lista se reduce", async () => {
   await until(async () => !(await page.$eval("#clients", (e) => e.hidden)), "chips visibles");
   eq(await texts("#clients .cf"), ["Todos", "Acme", "Bértoli", "Globex Corporation"], "chips (acme y Acme son el mismo)");

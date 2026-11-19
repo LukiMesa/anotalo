@@ -58,7 +58,7 @@ const fn browser(key: &'static str, name: &'static str, exes: &'static [&'static
     }
 }
 
-pub const PLATFORMS: &[Platform] = &[
+pub static PLATFORMS: &[Platform] = &[
     // Capturar solo el proceso de Teams da silencio en algunos PCs (fallo conocido de Windows): se
     // graba el dispositivo donde suena Teams.
     Platform {
