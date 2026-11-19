@@ -6,6 +6,7 @@ pub mod atomic;
 pub mod claude;
 pub mod config;
 pub mod detector;
+pub mod echo;
 pub mod engine;
 pub mod filter;
 pub mod hotkey;

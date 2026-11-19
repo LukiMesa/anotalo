@@ -16,6 +16,9 @@ rubato = "5.0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# Cancelación de eco (AEC3 de WebRTC en Rust puro, BSD-3-Clause): sin auriculares el micrófono
+# oye a los demás por los altavoces.
+sonora = "0.3.0"
 tract-onnx = "=0.23.10"
 unicode-normalization = "0.1"
 ureq = { version = "3.5.1", default-features = false, features = ["native-tls-no-default"] }
