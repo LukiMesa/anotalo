@@ -13,6 +13,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::echo::{EchoCanceller, FarBuffer, SharedFar};
 use crate::engine::Transcriber;
 use crate::gate::{Line, StartGate};
 use crate::segmenter::{Segment, Segmenter, SegmenterConfig, VadFn};
@@ -92,6 +93,9 @@ struct Lane {
     tx: Sender<Msg>,
     failures: u32,
     level: Option<Arc<Mutex<OnLevel>>>,
+    /// Solo "Otros": lo que suena, para cancelar su eco en el micrófono (sigue aunque la fuente
+    /// se cambie por otra).
+    far: Option<SharedFar>,
 }
 
 struct Shared {
@@ -119,10 +123,11 @@ impl Shared {
     /// Arranca la fuente del carril, reintentando con esperas crecientes.
     fn open(&self, lane: &mut Lane) -> bool {
         while lane.failures <= MAX_RETRIES {
-            match lane
-                .source
-                .start(on_audio(lane.tx.clone(), lane.level.clone()))
-            {
+            match lane.source.start(on_audio(
+                lane.tx.clone(),
+                lane.level.clone(),
+                lane.far.clone(),
+            )) {
                 Ok(()) => return true,
                 Err(e) => {
                     lane.failures += 1;
@@ -166,10 +171,19 @@ impl Shared {
     }
 }
 
-/// El callback de audio de un carril: encola sin bloquear y avisa del nivel (solo el micrófono).
-fn on_audio(tx: Sender<Msg>, level: Option<Arc<Mutex<OnLevel>>>) -> OnAudio {
+/// El callback de audio de un carril: encola sin bloquear, avisa del nivel (solo el micrófono) y
+/// guarda lo que suena para cancelar el eco (solo "Otros"; no espera a su carril, que puede ir
+/// por detrás con el modelo de voces).
+fn on_audio(
+    tx: Sender<Msg>,
+    level: Option<Arc<Mutex<OnLevel>>>,
+    far: Option<SharedFar>,
+) -> OnAudio {
     let mut last = f64::NEG_INFINITY;
     Box::new(move |t, x| {
+        if let Some(far) = &far {
+            far.lock().unwrap_or_else(|e| e.into_inner()).push(t, x);
+        }
         let _ = tx.send(Msg::Audio(t, x.to_vec()));
         if let Some(cb) = &level
             && t - last >= LEVEL_INTERVAL_S
@@ -204,6 +218,24 @@ fn notify_line(cb: Option<&Arc<Mutex<OnLine>>>, speaker: &str, start_s: f64, tex
 type OnResult = Arc<dyn Fn(Segment, String, Option<u32>) + Send + Sync>;
 /// El modelo de voces y las voces de la llamada, para el carril de "Otros".
 type Diar = (Arc<dyn Embed>, Arc<Mutex<Diarizer>>);
+/// Trozos de audio con su instante.
+type Chunks = Vec<(f64, Vec<f32>)>;
+
+/// Pasa el micrófono por el cancelador de eco. Si revienta, se avisa y se sigue sin él, con lo que
+/// tenía retenido sin limpiar: la voz de "Yo" no se pierde.
+fn cancel_echo(
+    aec: &mut Option<EchoCanceller>,
+    f: impl FnOnce(&mut EchoCanceller) -> Chunks,
+) -> Chunks {
+    let Some(a) = aec.as_mut() else {
+        return Vec::new();
+    };
+    if let Ok(out) = catch_unwind(AssertUnwindSafe(|| f(a))) {
+        return out;
+    }
+    log::error!("La cancelación de eco falló; el micrófono sigue sin ella");
+    aec.take().map(EchoCanceller::into_raw).unwrap_or_default()
+}
 
 fn lane_worker(
     rx: Receiver<Msg>,
@@ -212,6 +244,7 @@ fn lane_worker(
     transcriber: Arc<Transcriber>,
     on_result: OnResult,
     diar: Option<Diar>,
+    mut aec: Option<EchoCanceller>,
 ) {
     // Si el modelo de voces revienta, la frase sigue sin huella (si no, el carril moriría y lo que
     // dicen los demás dejaría de llegar al archivo). Se avisa solo la primera vez.
@@ -242,11 +275,28 @@ fn lane_worker(
             transcriber.submit(seg, Box::new(move |s, text| cb(s, text, voice)));
         }
     };
+    // el micrófono con "Otros" pasa antes por el cancelador de eco (`aec`), que lo devuelve limpio
+    // con sus mismos instantes, algo más tarde
     for msg in rx {
         match msg {
+            Msg::Audio(t, x) if aec.is_some() => {
+                for (t, x) in cancel_echo(&mut aec, |a| a.process(t, &x, now_s())) {
+                    submit(segmenter.feed(t - t0, &x));
+                }
+            }
             Msg::Audio(t, x) => submit(segmenter.feed(t - t0, &x)),
-            Msg::Idle(t) => submit(segmenter.idle(t - t0)),
+            Msg::Idle(t) => {
+                for (t, x) in cancel_echo(&mut aec, |a| a.poll(t)) {
+                    submit(segmenter.feed(t - t0, &x));
+                }
+                // lo que el cancelador aún retiene no es silencio
+                let held = aec.as_ref().and_then(EchoCanceller::held_since);
+                submit(segmenter.idle(held.map_or(t, |h| h.min(t)) - t0));
+            }
             Msg::Flush => {
+                for (t, x) in cancel_echo(&mut aec, EchoCanceller::drain) {
+                    submit(segmenter.feed(t - t0, &x));
+                }
                 submit(segmenter.flush());
                 return;
             }
@@ -353,11 +403,15 @@ impl CallSession {
             .as_ref()
             .zip(cfg.speakers.as_ref())
             .map(|((_, d), sp)| (d.clone(), sp.prints_dir.clone()));
-        let mut sources = vec![(mic, cfg.label_me.clone(), None)];
-        sources.extend(others.map(|o| (o, cfg.label_others.clone(), diar)));
+        // sin auriculares el micrófono oye a los demás: lo que suena en "Otros" se resta del
+        // micrófono (no en las notas: no hay "Otros")
+        let far = others.as_ref().map(|_| FarBuffer::shared());
+        let aec = far.clone().map(EchoCanceller::new);
+        let mut sources = vec![(mic, cfg.label_me.clone(), None, aec, None)];
+        sources.extend(others.map(|o| (o, cfg.label_others.clone(), diar, None, far)));
         let mut level = on_level.map(|l| Arc::new(Mutex::new(l)));
         let mut workers = Vec::new();
-        for (i, (source, label, lane_diar)) in sources.into_iter().enumerate() {
+        for (i, (source, label, lane_diar, lane_aec, lane_far)) in sources.into_iter().enumerate() {
             let seg_cfg = SegmenterConfig {
                 silence_ms: cfg.silence_ms,
                 max_segment_s: cfg.max_segment_s,
@@ -370,13 +424,14 @@ impl CallSession {
             workers.push(
                 std::thread::Builder::new()
                     .name(format!("carril {label}"))
-                    .spawn(move || lane_worker(rx, segmenter, t0, asr, cb, lane_diar))?,
+                    .spawn(move || lane_worker(rx, segmenter, t0, asr, cb, lane_diar, lane_aec))?,
             );
             let mut lane = Lane {
                 source,
                 tx,
                 failures: 0,
                 level: level.take(), // solo el primero (el micrófono)
+                far: lane_far,
             };
             shared.open(&mut lane);
             shared.lanes.lock().unwrap().push(lane);

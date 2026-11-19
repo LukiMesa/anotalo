@@ -19,9 +19,11 @@ use anotalo_whisper::Segment as Text;
 
 mod common {
     pub mod speaker;
+    pub mod voice;
 }
 
 use common::speaker::basis;
+use common::voice::{echo, mix, noise, only, voice};
 
 const SR: usize = 16_000;
 
@@ -400,6 +402,91 @@ fn test_mark_lands_between_lines() {
     );
     assert!(yo < marca && marca < otros, "{text}");
     assert!(lines.lock().unwrap().iter().any(|w| w == "Marca"));
+}
+
+/// Entrega de golpe, al arrancar, una señal cualquiera en trozos de 50 ms, con los instantes
+/// contados desde `base` (el mismo para el micrófono y "Otros": el eco cae donde toca).
+struct Wave {
+    x: Vec<f32>,
+    base: f64,
+}
+
+impl AudioSource for Wave {
+    fn name(&self) -> &str {
+        "onda"
+    }
+
+    fn start(&mut self, mut on_audio: OnAudio) -> Result<(), String> {
+        for (i, chunk) in self.x.chunks(800).enumerate() {
+            on_audio(self.base + (i * 800) as f64 / SR as f64, chunk);
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) {}
+
+    fn is_active(&self) -> bool {
+        true
+    }
+}
+
+/// La transcripción de una llamada con este micrófono y estos "Otros" (None: nota rápida).
+fn call(mic: Vec<f32>, others: Option<Vec<f32>>) -> String {
+    let d = tempfile::tempdir().unwrap();
+    let base = now_s();
+    let sess = CallSession::start(
+        cfg(d.path(), "Teams"),
+        transcriber(),
+        Box::new(Wave { x: mic, base }),
+        others.map(|x| Box::new(Wave { x, base }) as Box<dyn AudioSource>),
+        None,
+        None,
+        None,
+        fake_vad(),
+    )
+    .unwrap();
+    read(&sess.stop().unwrap())
+}
+
+fn count(text: &str, who: &str) -> usize {
+    text.matches(&format!("{who}:**")).count()
+}
+
+/// Sin auriculares el micrófono oye a los demás por los altavoces: sin cancelar el eco, sus frases
+/// salen también como "Yo"; cancelándolo con lo que suena en "Otros", no. (Menos de 5 s: las
+/// fuentes falsas lo entregan todo de golpe y lo que suena se guarda solo 5 s.)
+#[test]
+fn test_echo_of_others_is_not_yo() {
+    let far = voice(1, 4.5, 120.0);
+    let mic = mix(&[&echo(&far, 0.08, 0.5), &noise(3, far.len())]);
+    // nota rápida (sin "Otros", sin nada con lo que cancelar): el eco sale como "Yo"
+    let raw = call(mic.clone(), None);
+    let t = call(mic, Some(far));
+    println!(
+        "\"Yo\" sin cancelar: {}; cancelando: {}",
+        count(&raw, "Yo"),
+        count(&t, "Yo")
+    );
+    assert!(count(&raw, "Yo") >= 1, "{raw}");
+    assert_eq!(count(&t, "Yo"), 0, "{t}");
+    assert!(count(&t, "Otros") >= 1, "{t}");
+}
+
+/// Con el eco de los demás en el micrófono, lo que dice "Yo" cuando ellos callan sigue saliendo,
+/// en su momento.
+#[test]
+fn test_own_voice_survives_echo_cancelling() {
+    let far = only(&voice(1, 4.5, 120.0), 0.0, 2.0);
+    let near = only(&voice(2, 4.5, 210.0), 3.0, 4.5);
+    let mic = mix(&[&echo(&far, 0.08, 0.5), &near, &noise(3, far.len())]);
+    let t = call(mic, Some(far));
+    assert!(count(&t, "Yo") >= 1 && count(&t, "Otros") >= 1, "{t}");
+    for line in t.lines().filter(|l| l.contains("Yo:**")) {
+        assert!(
+            line >= "**[00:00:02]",
+            "\"Yo\" antes de hablar: {line}\n{t}"
+        );
+    }
 }
 
 /// Distingue las voces falsas por su frecuencia (cruces por cero en la parte con sonido): bajo
